@@ -1,0 +1,101 @@
+{% extends "base.html" %}
+{% block title %}Historique — ValueBet Bot{% endblock %}
+{% block content %}
+<div class="container">
+    <h1>📋 Historique des paris</h1>
+    <p class="subtitle">Tous les value bets détectés, triés par date décroissante</p>
+
+    {% if bets %}
+    <div class="card">
+        <div style="display:flex;gap:1rem;margin-bottom:1rem;flex-wrap:wrap">
+            <input id="search" placeholder="🔍 Rechercher équipe, ligue..." style="background:var(--surface2);border:1px solid var(--border);color:var(--text);padding:.5rem 1rem;border-radius:8px;flex:1;min-width:200px;outline:none;">
+            <select id="filter-result" style="background:var(--surface2);border:1px solid var(--border);color:var(--text);padding:.5rem 1rem;border-radius:8px;outline:none;">
+                <option value="">Tous les résultats</option>
+                <option value="1">Gagnés</option>
+                <option value="0">Perdus</option>
+                <option value="pending">En attente</option>
+            </select>
+            <select id="filter-league" style="background:var(--surface2);border:1px solid var(--border);color:var(--text);padding:.5rem 1rem;border-radius:8px;outline:none;">
+                <option value="">Toutes les ligues</option>
+                <option value="Ligue 1">Ligue 1</option>
+                <option value="Premier League">Premier League</option>
+            </select>
+        </div>
+        <div class="table-wrap">
+            <table id="bets-table">
+                <thead>
+                    <tr>
+                        <th>Date</th>
+                        <th>Match</th>
+                        <th>Ligue</th>
+                        <th>Marché</th>
+                        <th>Bookmaker</th>
+                        <th>Cote BK</th>
+                        <th>Cote Modèle</th>
+                        <th>Proba</th>
+                        <th>Value</th>
+                        <th>Résultat</th>
+                        <th>Succès</th>
+                    </tr>
+                </thead>
+                <tbody id="bets-body">
+                {% for bet in bets %}
+                <tr
+                    data-success="{{ bet.success if bet.success is not none else 'pending' }}"
+                    data-league="{{ bet.league }}"
+                    data-search="{{ bet.home_team }} {{ bet.away_team }} {{ bet.league }} {{ bet.market }}"
+                >
+                    <td>{{ bet.match_date }}</td>
+                    <td><strong>{{ bet.home_team }}</strong> vs <strong>{{ bet.away_team }}</strong></td>
+                    <td><span class="badge badge-league">{{ bet.league }}</span></td>
+                    <td>{{ bet.market }}</td>
+                    <td>{{ bet.bookmaker }}</td>
+                    <td><strong>{{ bet.bk_odds }}</strong></td>
+                    <td style="color:var(--text-dim)">{{ bet.model_odds }}</td>
+                    <td>{{ "%.1f"|format(bet.probability * 100) }}%</td>
+                    <td class="{% if bet.value >= 0.10 %}value-high{% elif bet.value >= 0.05 %}value-mid{% else %}value-low{% endif %}">
+                        +{{ "%.1f"|format(bet.value * 100) }}%
+                    </td>
+                    <td>{{ bet.result or '—' }}</td>
+                    <td>
+                        {% if bet.success == 1 %}
+                            <span class="badge badge-win">✅ Oui</span>
+                        {% elif bet.success == 0 %}
+                            <span class="badge badge-loss">❌ Non</span>
+                        {% else %}
+                            <span class="badge badge-pending">⏳ Attente</span>
+                        {% endif %}
+                    </td>
+                </tr>
+                {% endfor %}
+                </tbody>
+            </table>
+        </div>
+    </div>
+    {% else %}
+    <div class="empty card">
+        <p style="font-size:3rem">📭</p>
+        <p>Aucun paris enregistré pour le moment.</p>
+        <p style="margin-top:.5rem">Lancez le scheduler pour commencer : <code>python scheduler.py run</code></p>
+    </div>
+    {% endif %}
+</div>
+
+<script>
+function filterTable() {
+    const search = document.getElementById('search').value.toLowerCase();
+    const result = document.getElementById('filter-result').value;
+    const league = document.getElementById('filter-league').value;
+    const rows = document.querySelectorAll('#bets-body tr');
+    rows.forEach(row => {
+        const matchSearch = !search || row.dataset.search.toLowerCase().includes(search);
+        const matchResult = !result || row.dataset.success === result;
+        const matchLeague = !league || row.dataset.league === league;
+        row.style.display = (matchSearch && matchResult && matchLeague) ? '' : 'none';
+    });
+}
+document.getElementById('search').addEventListener('input', filterTable);
+document.getElementById('filter-result').addEventListener('change', filterTable);
+document.getElementById('filter-league').addEventListener('change', filterTable);
+</script>
+{% endblock %}

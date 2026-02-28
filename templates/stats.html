@@ -1,0 +1,107 @@
+{% extends "base.html" %}
+{% block title %}Statistiques — ValueBet Bot{% endblock %}
+{% block content %}
+<div class="container">
+    <h1>📊 Statistiques de performance</h1>
+    <p class="subtitle">Analyse de vos paris value détectés</p>
+
+    {% set o = stats.overall %}
+    <div class="stat-grid">
+        <div class="stat-card">
+            <div class="value">{{ o.total or 0 }}</div>
+            <div class="label">Paris totaux</div>
+        </div>
+        <div class="stat-card">
+            <div class="value" style="color:var(--success)">{{ o.wins or 0 }}</div>
+            <div class="label">Paris gagnés</div>
+        </div>
+        <div class="stat-card">
+            <div class="value" style="color:var(--fail)">{{ o.losses or 0 }}</div>
+            <div class="label">Paris perdus</div>
+        </div>
+        <div class="stat-card">
+            <div class="value" style="color:var(--yellow)">{{ o.pending or 0 }}</div>
+            <div class="label">En attente</div>
+        </div>
+        <div class="stat-card">
+            <div class="value {% if (o.win_rate or 0) >= 55 %}value-high{% elif (o.win_rate or 0) >= 45 %}value-mid{% else %}value-low{% endif %}">
+                {{ o.win_rate or 0 }}%
+            </div>
+            <div class="label">Taux de réussite</div>
+        </div>
+        <div class="stat-card">
+            <div class="value {% if (o.roi or 0) > 0 %}value-high{% elif (o.roi or 0) == 0 %}value-mid{% else %}value-low{% endif %}">
+                {{ o.roi or 0 }}%
+            </div>
+            <div class="label">ROI (1u par pari)</div>
+        </div>
+        <div class="stat-card">
+            <div class="value">+{{ o.avg_value_pct or 0 }}%</div>
+            <div class="label">Value moyenne</div>
+        </div>
+        <div class="stat-card">
+            <div class="value">{{ o.avg_probability_pct or 0 }}%</div>
+            <div class="label">Proba moyenne</div>
+        </div>
+    </div>
+
+    <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(300px,1fr));gap:1.5rem">
+        <!-- By league -->
+        <div class="card">
+            <h2>Par ligue</h2>
+            {% if stats.by_league %}
+            <table>
+                <thead>
+                    <tr>
+                        <th>Ligue</th>
+                        <th>Total</th>
+                        <th>Gagnés</th>
+                        <th>Value moy.</th>
+                    </tr>
+                </thead>
+                <tbody>
+                {% for row in stats.by_league %}
+                <tr>
+                    <td><span class="badge badge-league">{{ row.league }}</span></td>
+                    <td>{{ row.total }}</td>
+                    <td style="color:var(--success)">{{ row.wins or 0 }}</td>
+                    <td class="value-mid">+{{ row.avg_value or 0 }}%</td>
+                </tr>
+                {% endfor %}
+                </tbody>
+            </table>
+            {% else %}
+            <p style="color:var(--text-dim)">Pas encore de données.</p>
+            {% endif %}
+        </div>
+
+        <!-- Win rate visual -->
+        <div class="card">
+            <h2>Taux de réussite global</h2>
+            {% set wr = o.win_rate or 0 %}
+            <div style="margin:1.5rem 0;text-align:center">
+                <div style="font-size:3rem;font-weight:800;color:{% if wr >= 55 %}var(--success){% elif wr >= 45 %}var(--yellow){% else %}var(--fail){% endif %}">
+                    {{ wr }}%
+                </div>
+            </div>
+            <div style="background:var(--surface2);border-radius:20px;overflow:hidden;height:12px">
+                <div style="background:{% if wr >= 55 %}var(--success){% elif wr >= 45 %}var(--yellow){% else %}var(--fail){% endif %};width:{{ [wr,100]|min }}%;height:100%;transition:width 1s;border-radius:20px"></div>
+            </div>
+            <p style="color:var(--text-dim);font-size:.8rem;margin-top:.8rem;text-align:center">
+                {{ o.wins or 0 }} gagnés / {{ (o.wins or 0) + (o.losses or 0) }} résolus
+            </p>
+
+            <div style="margin-top:1.5rem;border-top:1px solid var(--border);padding-top:1.5rem">
+                <p style="color:var(--text-dim);font-size:.8rem">
+                    <strong style="color:var(--text)">ROI simulé :</strong>
+                    En pariant 1 unité sur chaque sélection, votre retour est de
+                    <strong style="color:{% if (o.roi or 0) > 0 %}var(--success){% else %}var(--fail){% endif %}">
+                        {{ o.roi or 0 }}%
+                    </strong>
+                    sur {{ (o.wins or 0) + (o.losses or 0) }} paris résolus.
+                </p>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}

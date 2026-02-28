@@ -1,0 +1,63 @@
+{% extends "base.html" %}
+{% block title %}ValueBet Bot — Accueil{% endblock %}
+{% block content %}
+<div class="container">
+    <div class="hero">
+        <h1>🎯 ValueBet Bot</h1>
+        <p>Détection automatique de paris à valeur en Ligue 1 et Premier League<br>via modèle de Poisson et Expected Goals.</p>
+        <div class="btn-row">
+            <a href="/live" class="btn btn-primary">⚡ Paris du jour</a>
+            <a href="/history" class="btn btn-secondary">📋 Historique</a>
+            <a href="/stats" class="btn btn-secondary">📊 Statistiques</a>
+        </div>
+    </div>
+
+    <div id="quick-stats" class="stat-grid"></div>
+
+    <div class="card">
+        <h2>Comment ça fonctionne</h2>
+        <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:1.5rem;margin-top:1rem">
+            <div>
+                <div style="font-size:1.5rem;margin-bottom:.5rem">📥</div>
+                <strong>1. Collecte de données</strong>
+                <p style="color:var(--text-dim);font-size:.85rem;margin-top:.3rem">API-Sports pour les stats équipes, The Odds API pour les cotes Winamax/Betclic</p>
+            </div>
+            <div>
+                <div style="font-size:1.5rem;margin-bottom:.5rem">🧮</div>
+                <strong>2. Modèle Poisson</strong>
+                <p style="color:var(--text-dim);font-size:.85rem;margin-top:.3rem">Calcul des xG via forces attaque/défense, distribution de Poisson pour les probas</p>
+            </div>
+            <div>
+                <div style="font-size:1.5rem;margin-bottom:.5rem">💎</div>
+                <strong>3. Détection de value</strong>
+                <p style="color:var(--text-dim);font-size:.85rem;margin-top:.3rem">Value = (Cote BK × Proba modèle) - 1 > seuil configuré (défaut 5%)</p>
+            </div>
+            <div>
+                <div style="font-size:1.5rem;margin-bottom:.5rem">📲</div>
+                <strong>4. Notification Telegram</strong>
+                <p style="color:var(--text-dim);font-size:.85rem;margin-top:.3rem">Top 5 value bets envoyés automatiquement chaque matin à 8h UTC</p>
+            </div>
+        </div>
+    </div>
+</div>
+
+<script>
+fetch('/api/stats').then(r=>r.json()).then(data=>{
+    const o = data.overall;
+    const grid = document.getElementById('quick-stats');
+    const items = [
+        {label:'Paris totaux', value: o.total || 0},
+        {label:'Taux de réussite', value: (o.win_rate||0)+'%'},
+        {label:'ROI', value: (o.roi||0)+'%'},
+        {label:'Value moy.', value: '+'+(o.avg_value_pct||0)+'%'},
+        {label:'En attente', value: o.pending||0},
+    ];
+    grid.innerHTML = items.map(i=>
+        `<div class="stat-card">
+            <div class="value">${i.value}</div>
+            <div class="label">${i.label}</div>
+        </div>`
+    ).join('');
+});
+</script>
+{% endblock %}

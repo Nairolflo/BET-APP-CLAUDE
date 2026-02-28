@@ -1,0 +1,170 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{% block title %}ValueBet Bot{% endblock %}</title>
+    <style>
+        :root {
+            --bg: #0f1117;
+            --surface: #1a1d2e;
+            --surface2: #252840;
+            --accent: #6c63ff;
+            --accent2: #00d4aa;
+            --red: #ff4d6d;
+            --yellow: #ffd166;
+            --text: #e8eaf6;
+            --text-dim: #8b8fa8;
+            --border: #2e3153;
+            --success: #06d6a0;
+            --fail: #ef476f;
+        }
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+        body {
+            background: var(--bg);
+            color: var(--text);
+            font-family: 'Segoe UI', system-ui, sans-serif;
+            min-height: 100vh;
+        }
+        nav {
+            background: var(--surface);
+            border-bottom: 1px solid var(--border);
+            padding: 0 2rem;
+            display: flex;
+            align-items: center;
+            gap: 2rem;
+            height: 60px;
+        }
+        nav .logo {
+            font-size: 1.2rem;
+            font-weight: 700;
+            color: var(--accent);
+            letter-spacing: 1px;
+        }
+        nav a {
+            color: var(--text-dim);
+            text-decoration: none;
+            font-size: 0.9rem;
+            padding: 0.4rem 0.8rem;
+            border-radius: 6px;
+            transition: all 0.2s;
+        }
+        nav a:hover, nav a.active {
+            color: var(--text);
+            background: var(--surface2);
+        }
+        .container {
+            max-width: 1300px;
+            margin: 0 auto;
+            padding: 2rem;
+        }
+        h1 { font-size: 1.6rem; margin-bottom: 0.5rem; }
+        h2 { font-size: 1.2rem; margin-bottom: 1rem; color: var(--accent); }
+        .subtitle { color: var(--text-dim); font-size: 0.9rem; margin-bottom: 2rem; }
+
+        /* Cards */
+        .card {
+            background: var(--surface);
+            border: 1px solid var(--border);
+            border-radius: 12px;
+            padding: 1.5rem;
+        }
+
+        /* Stat grid */
+        .stat-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+            gap: 1rem;
+            margin-bottom: 2rem;
+        }
+        .stat-card {
+            background: var(--surface);
+            border: 1px solid var(--border);
+            border-radius: 10px;
+            padding: 1.2rem;
+            text-align: center;
+        }
+        .stat-card .value {
+            font-size: 2rem;
+            font-weight: 700;
+            color: var(--accent2);
+        }
+        .stat-card .label {
+            font-size: 0.8rem;
+            color: var(--text-dim);
+            margin-top: 0.3rem;
+        }
+
+        /* Table */
+        .table-wrap { overflow-x: auto; }
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            font-size: 0.88rem;
+        }
+        thead tr { border-bottom: 2px solid var(--border); }
+        th {
+            text-align: left;
+            padding: 0.8rem 0.6rem;
+            color: var(--text-dim);
+            font-weight: 600;
+            text-transform: uppercase;
+            font-size: 0.75rem;
+            letter-spacing: 0.5px;
+        }
+        td { padding: 0.75rem 0.6rem; border-bottom: 1px solid var(--border); }
+        tr:hover td { background: var(--surface2); }
+
+        /* Badges */
+        .badge {
+            display: inline-block;
+            padding: 0.2rem 0.6rem;
+            border-radius: 20px;
+            font-size: 0.78rem;
+            font-weight: 600;
+        }
+        .badge-win { background: #06d6a020; color: var(--success); border: 1px solid #06d6a040; }
+        .badge-loss { background: #ef476f20; color: var(--fail); border: 1px solid #ef476f40; }
+        .badge-pending { background: #ffd16620; color: var(--yellow); border: 1px solid #ffd16640; }
+        .badge-league { background: var(--surface2); color: var(--accent); border: 1px solid var(--border); }
+
+        .value-high { color: var(--success); font-weight: 700; }
+        .value-mid { color: var(--yellow); font-weight: 600; }
+        .value-low { color: var(--text-dim); }
+
+        /* Hero */
+        .hero {
+            text-align: center;
+            padding: 4rem 2rem;
+        }
+        .hero h1 { font-size: 2.5rem; color: var(--accent); }
+        .hero p { color: var(--text-dim); margin: 1rem 0 2rem; font-size: 1.1rem; }
+        .btn-row { display: flex; gap: 1rem; justify-content: center; flex-wrap: wrap; }
+        .btn {
+            display: inline-block;
+            padding: 0.8rem 1.8rem;
+            border-radius: 8px;
+            font-weight: 600;
+            text-decoration: none;
+            transition: all 0.2s;
+        }
+        .btn-primary { background: var(--accent); color: white; }
+        .btn-primary:hover { background: #5a52e0; }
+        .btn-secondary { background: var(--surface2); color: var(--text); border: 1px solid var(--border); }
+        .btn-secondary:hover { background: var(--border); }
+
+        .empty { text-align: center; color: var(--text-dim); padding: 3rem; }
+    </style>
+</head>
+<body>
+    <nav>
+        <span class="logo">⚽ ValueBet</span>
+        <a href="/" {% if request.path == '/' %}class="active"{% endif %}>Accueil</a>
+        <a href="/live" {% if request.path == '/live' %}class="active"{% endif %}>Live</a>
+        <a href="/history" {% if request.path == '/history' %}class="active"{% endif %}>Historique</a>
+        <a href="/stats" {% if request.path == '/stats' %}class="active"{% endif %}>Statistiques</a>
+    </nav>
+
+    {% block content %}{% endblock %}
+</body>
+</html>

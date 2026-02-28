@@ -1,0 +1,48 @@
+{% extends "base.html" %}
+{% block title %}Live — ValueBet Bot{% endblock %}
+{% block content %}
+<div class="container">
+    <h1>⚡ Paris du jour</h1>
+    <p class="subtitle">Value bets pour les matchs du {{ today }}</p>
+
+    {% if bets %}
+    <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(320px,1fr));gap:1.5rem">
+        {% for bet in bets %}
+        <div class="card" style="border-left:3px solid {% if bet.value >= 0.10 %}var(--success){% elif bet.value >= 0.07 %}var(--yellow){% else %}var(--accent){% endif %}">
+            <div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:1rem">
+                <span class="badge badge-league">{{ bet.league }}</span>
+                <span class="badge {% if bet.value >= 0.10 %}badge-win{% elif bet.value >= 0.07 %}badge-pending{% else %}badge-league{% endif %}"
+                      style="font-size:.9rem">
+                    +{{ "%.1f"|format(bet.value * 100) }}% value
+                </span>
+            </div>
+            <div style="font-size:1.1rem;font-weight:700;margin-bottom:.3rem">
+                {{ bet.home_team }} vs {{ bet.away_team }}
+            </div>
+            <div style="color:var(--text-dim);font-size:.85rem;margin-bottom:1rem">{{ bet.match_date }}</div>
+
+            <div style="display:grid;grid-template-columns:1fr 1fr;gap:.5rem;font-size:.88rem">
+                <div><span style="color:var(--text-dim)">Marché</span><br><strong>{{ bet.market }}</strong></div>
+                <div><span style="color:var(--text-dim)">Bookmaker</span><br><strong>{{ bet.bookmaker }}</strong></div>
+                <div><span style="color:var(--text-dim)">Cote BK</span><br><strong style="color:var(--accent2)">{{ bet.bk_odds }}</strong></div>
+                <div><span style="color:var(--text-dim)">Cote modèle</span><br><strong>{{ bet.model_odds }}</strong></div>
+                <div><span style="color:var(--text-dim)">Probabilité</span><br><strong>{{ "%.1f"|format(bet.probability * 100) }}%</strong></div>
+                <div><span style="color:var(--text-dim)">Statut</span><br>
+                    {% if bet.success == 1 %}<span class="badge badge-win">✅ Gagné</span>
+                    {% elif bet.success == 0 %}<span class="badge badge-loss">❌ Perdu</span>
+                    {% else %}<span class="badge badge-pending">⏳ Attente</span>{% endif %}
+                </div>
+            </div>
+        </div>
+        {% endfor %}
+    </div>
+    {% else %}
+    <div class="empty card">
+        <p style="font-size:3rem">⏰</p>
+        <p>Aucun value bet détecté pour aujourd'hui.</p>
+        <p style="margin-top:.5rem;color:var(--text-dim)">Le moteur tourne chaque matin à 8h UTC.</p>
+        <p style="margin-top:1rem"><a href="/history" class="btn btn-secondary">Voir l'historique</a></p>
+    </div>
+    {% endif %}
+</div>
+{% endblock %}
