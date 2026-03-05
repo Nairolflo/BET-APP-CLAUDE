@@ -355,13 +355,23 @@ def get_stats() -> dict:
     try:
         cur = conn.cursor()
 
-        cur.execute("""
+        # Sous-requête dédoublonnée : un seul bet par home+away+market (le plus récent)
+        dedup = """
+            SELECT id, league, value, success
+            FROM bets
+            WHERE id IN (
+                SELECT MAX(id) FROM bets
+                GROUP BY home_team, away_team, market
+            )
+        """
+
+        cur.execute(f"""
             SELECT
                 COUNT(*) as total,
                 SUM(CASE WHEN success = 1 THEN 1 ELSE 0 END) as wins,
                 SUM(CASE WHEN success = 0 THEN 1 ELSE 0 END) as losses,
                 SUM(CASE WHEN success = -1 THEN 1 ELSE 0 END) as pending
-            FROM bets
+            FROM ({dedup}) u
         """)
         overall_raw = row_to_dict(cur, cur.fetchone())
 
@@ -370,23 +380,23 @@ def get_stats() -> dict:
         losses  = overall_raw.get("losses") or 0
         pending = overall_raw.get("pending") or 0
 
-        settled = max(total - pending, 1)
+        settled  = max(total - pending, 1)
         win_rate = round(wins / settled * 100, 1)
         roi      = round((wins - losses) / settled * 100, 1)
 
-        cur.execute("""
+        cur.execute(f"""
             SELECT league,
                 COUNT(*) as total,
                 SUM(CASE WHEN success = 1 THEN 1 ELSE 0 END) as wins,
                 ROUND(CAST(AVG(value) * 100 AS NUMERIC), 1) as avg_value
-            FROM bets
+            FROM ({dedup}) u
             GROUP BY league
         """)
         by_league = rows_to_dicts(cur, cur.fetchall())
 
-        cur.execute("""
+        cur.execute(f"""
             SELECT ROUND(CAST(AVG(value) * 100 AS NUMERIC), 1) as avg_value
-            FROM bets
+            FROM ({dedup}) u
         """)
         avg_row = cur.fetchone()
         avg_value_pct = (avg_row[0] if avg_row else 0) or 0
