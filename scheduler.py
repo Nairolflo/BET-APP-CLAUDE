@@ -265,31 +265,20 @@ def handle_status():
 
 
 def handle_bets():
-    bets = get_all_bets(limit=200)
-    
-    # Filtre par date de création (created_at) pas match_date
-    from datetime import datetime
-    today = datetime.utcnow().date().isoformat()
-    
-    # Bets créés aujourd'hui (created_at commence par today)
-    today_bets = [b for b in bets if str(b.get("created_at", ""))[:10] == today]
+    bets = get_all_bets(limit=100)
 
-    if not today_bets:
-        send_message(
-            f"📭 <b>Aucun value bet aujourd'hui</b> ({today})\n"
-            f"Prochaine analyse : {SCHEDULER_HOUR:02d}h00 UTC\n\n"
-            f"💡 Tapez /run pour lancer une analyse maintenant."
-        )
+    if not bets:
+        send_message("📭 <b>Aucun value bet en base.</b>\n💡 Tapez /run pour lancer une analyse.")
         return
 
-    msg = f"⚽ <b>Value bets du {today}</b> — {len(today_bets)} sélection(s)\n{'─'*30}\n\n"
-    for b in today_bets[:10]:
+    msg = f"⚽ <b>Tous les value bets</b> — {len(bets)} sélection(s)\n{'─'*30}\n\n"
+    for b in bets[:15]:
         status = "✅" if b["success"] == 1 else "❌" if b["success"] == 0 else "⏳"
         msg += (
             f"{status} <b>{b['home_team']} vs {b['away_team']}</b>\n"
+            f"   📅 {b['match_date']} — {b['league']}\n"
             f"   📌 {b['market']} @ <b>{b['bk_odds']}</b>\n"
-            f"   💎 Value : <b>+{b['value']*100:.1f}%</b> | "
-            f"Proba : {b['probability']*100:.0f}%\n"
+            f"   💎 Value : <b>+{b['value']*100:.1f}%</b> | Proba : {b['probability']*100:.0f}%\n"
             f"   🏦 {b['bookmaker']}\n\n"
         )
     send_message(msg)
