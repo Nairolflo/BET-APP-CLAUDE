@@ -12,6 +12,7 @@ log = logging.getLogger(__name__)
 
 DATABASE_URL = os.getenv("DATABASE_URL", "")
 
+
 # ─────────────────────────────────────────────
 # CONNECTION
 # ─────────────────────────────────────────────
@@ -19,11 +20,9 @@ DATABASE_URL = os.getenv("DATABASE_URL", "")
 def get_connection():
     if DATABASE_URL:
         import psycopg2
-        import psycopg2.extras
         conn = psycopg2.connect(DATABASE_URL)
         return conn
     else:
-        # Fallback SQLite pour dev local
         import sqlite3
         db_path = os.getenv("DB_PATH", "valuebet.db")
         db_dir = os.path.dirname(db_path)
@@ -38,16 +37,22 @@ def is_postgres():
     return bool(DATABASE_URL)
 
 
-def placeholder(n=1):
-    """Retourne %s pour PostgreSQL, ? pour SQLite."""
-    if is_postgres():
-        return ", ".join(["%s"] * n)
-    return ", ".join(["?"] * n)
-
-
 def ph():
-    """Single placeholder."""
     return "%s" if is_postgres() else "?"
+
+
+def row_to_dict(cur, row):
+    if is_postgres():
+        cols = [d[0] for d in cur.description]
+        return dict(zip(cols, row))
+    return dict(row)
+
+
+def rows_to_dicts(cur, rows):
+    if is_postgres():
+        cols = [d[0] for d in cur.description]
+        return [dict(zip(cols, row)) for row in rows]
+    return [dict(row) for row in rows]
 
 
 # ─────────────────────────────────────────────
@@ -144,9 +149,30 @@ def init_db():
 # ─────────────────────────────────────────────
 
 def save_bet(bet: dict) -> int:
+    """
+    Insère un bet en DB.
+    Si un bet identique existe déjà (même match + marché + bookmaker),
+    retourne l'ID existant sans créer de doublon.
+    """
     conn = get_connection()
     try:
         cur = conn.cursor()
+        p = ph()
+
+        # Vérification doublon
+        cur.execute(f"""
+            SELECT id FROM bets
+            WHERE match_date = {p} AND home_team = {p}
+              AND away_team = {p} AND market = {p} AND bookmaker = {p}
+        """, (
+            bet.get("match_date"), bet.get("home_team"),
+            bet.get("away_team"), bet.get("market"), bet.get("bookmaker"),
+        ))
+        existing = cur.fetchone()
+        if existing:
+            return existing[0]
+
+        # Insertion
         if is_postgres():
             cur.execute("""
                 INSERT INTO bets
@@ -196,11 +222,7 @@ def get_all_bets(limit: int = 100) -> list:
             ORDER BY created_at DESC
             LIMIT {p}
         """, (limit,))
-        rows = cur.fetchall()
-        if is_postgres():
-            cols = [d[0] for d in cur.description]
-            return [dict(zip(cols, row)) for row in rows]
-        return [dict(row) for row in rows]
+        return rows_to_dicts(cur, cur.fetchall())
     finally:
         conn.close()
 
@@ -226,11 +248,7 @@ def get_pending_bets() -> list:
             FROM bets WHERE success = -1
             ORDER BY match_date ASC
         """)
-        rows = cur.fetchall()
-        if is_postgres():
-            cols = [d[0] for d in cur.description]
-            return [dict(zip(cols, row)) for row in rows]
-        return [dict(row) for row in rows]
+        return rows_to_dicts(cur, cur.fetchall())
     finally:
         conn.close()
 
@@ -290,28 +308,16 @@ def get_team_stats(league_id: int, season: int) -> dict:
     conn = get_connection()
     try:
         cur = conn.cursor()
-        if is_postgres():
-            cur.execute("""
-                SELECT team_id, team_name,
-                       home_goals_scored, home_goals_conceded,
-                       away_goals_scored, away_goals_conceded,
-                       home_games, away_games
-                FROM team_stats
-                WHERE league_id = %s AND season = %s
-            """, (league_id, season))
-            cols = [d[0] for d in cur.description]
-            rows = [dict(zip(cols, row)) for row in cur.fetchall()]
-        else:
-            cur.execute("""
-                SELECT team_id, team_name,
-                       home_goals_scored, home_goals_conceded,
-                       away_goals_scored, away_goals_conceded,
-                       home_games, away_games
-                FROM team_stats
-                WHERE league_id = ? AND season = ?
-            """, (league_id, season))
-            rows = [dict(row) for row in cur.fetchall()]
-
+        p = ph()
+        cur.execute(f"""
+            SELECT team_id, team_name,
+                   home_goals_scored, home_goals_conceded,
+                   away_goals_scored, away_goals_conceded,
+                   home_games, away_games
+            FROM team_stats
+            WHERE league_id = {p} AND season = {p}
+        """, (league_id, season))
+        rows = rows_to_dicts(cur, cur.fetchall())
         return {row["team_id"]: row for row in rows}
     finally:
         conn.close()
@@ -326,7 +332,6 @@ def get_stats() -> dict:
     try:
         cur = conn.cursor()
 
-        # Stats globales
         cur.execute("""
             SELECT
                 COUNT(*) as total,
@@ -335,22 +340,17 @@ def get_stats() -> dict:
                 SUM(CASE WHEN success = -1 THEN 1 ELSE 0 END) as pending
             FROM bets
         """)
-        row = cur.fetchone()
-        if is_postgres():
-            cols = [d[0] for d in cur.description]
-            overall_raw = dict(zip(cols, row))
-        else:
-            overall_raw = dict(row)
+        overall_raw = row_to_dict(cur, cur.fetchone())
 
         total   = overall_raw.get("total") or 0
         wins    = overall_raw.get("wins") or 0
         losses  = overall_raw.get("losses") or 0
         pending = overall_raw.get("pending") or 0
 
-        win_rate = round(wins / max(total - pending, 1) * 100, 1)
-        roi      = round((wins - losses) / max(total - pending, 1) * 100, 1)
+        settled = max(total - pending, 1)
+        win_rate = round(wins / settled * 100, 1)
+        roi      = round((wins - losses) / settled * 100, 1)
 
-        # Stats par ligue
         cur.execute("""
             SELECT league,
                 COUNT(*) as total,
@@ -359,16 +359,14 @@ def get_stats() -> dict:
             FROM bets
             GROUP BY league
         """)
-        if is_postgres():
-            cols = [d[0] for d in cur.description]
-            by_league = [dict(zip(cols, r)) for r in cur.fetchall()]
-        else:
-            by_league = [dict(r) for r in cur.fetchall()]
+        by_league = rows_to_dicts(cur, cur.fetchall())
 
-        # Valeur moyenne globale
-        cur.execute("SELECT ROUND(CAST(AVG(value) * 100 AS NUMERIC), 1) as avg_value FROM bets")
+        cur.execute("""
+            SELECT ROUND(CAST(AVG(value) * 100 AS NUMERIC), 1) as avg_value
+            FROM bets
+        """)
         avg_row = cur.fetchone()
-        avg_value_pct = (avg_row[0] if is_postgres() else dict(avg_row).get("avg_value")) or 0
+        avg_value_pct = (avg_row[0] if avg_row else 0) or 0
 
         return {
             "overall": {
@@ -378,7 +376,7 @@ def get_stats() -> dict:
                 "pending":       pending,
                 "win_rate":      win_rate,
                 "roi":           roi,
-                "avg_value_pct": avg_value_pct,
+                "avg_value_pct": float(avg_value_pct),
             },
             "by_league": by_league,
         }
