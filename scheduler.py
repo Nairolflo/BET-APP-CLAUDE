@@ -94,7 +94,6 @@ def run_value_bet_engine(silent=False):
         return
 
     worker_state["running"] = True
-    delete_today_pending_bets()
     now = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
     log.info("=" * 60)
     log.info(f"⚽ VALUE BET ENGINE — {now}")
