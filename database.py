@@ -405,3 +405,25 @@ def get_stats() -> dict:
         }
     finally:
         conn.close()
+
+
+def delete_today_pending_bets():
+    """
+    Supprime tous les bets du jour non encore résolus.
+    Appelé au début de chaque run pour éviter les doublons.
+    """
+    from datetime import datetime
+    today = datetime.utcnow().date().isoformat()
+    conn = get_connection()
+    try:
+        cur = conn.cursor()
+        p = ph()
+        cur.execute(
+            f"DELETE FROM bets WHERE match_date = {p} AND success = -1",
+            (today,)
+        )
+        deleted = cur.rowcount
+        conn.commit()
+        log.info(f"[DB] {deleted} bets du jour supprimés avant réanalyse.")
+    finally:
+        conn.close()

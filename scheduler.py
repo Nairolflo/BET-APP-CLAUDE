@@ -28,7 +28,7 @@ load_dotenv()
 
 from database import (
     init_db, save_bet, save_team_stats, get_team_stats,
-    get_all_bets, get_stats, is_bet_notified, mark_bet_notified
+    get_all_bets, get_stats, is_bet_notified, mark_bet_notified, delete_today_pending_bets
 )
 from api_clients import get_fixtures, get_odds, get_team_standings
 from model import calc_league_averages, calc_attack_defense_strength, predict_match, find_value_bets
@@ -93,6 +93,7 @@ def run_value_bet_engine(silent=False):
         return
 
     worker_state["running"] = True
+    delete_today_pending_bets()
     now = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
     log.info("=" * 60)
     log.info(f"⚽ VALUE BET ENGINE — {now}")
