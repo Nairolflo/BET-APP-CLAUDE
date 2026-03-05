@@ -440,22 +440,17 @@ def delete_today_pending_bets():
 
 
 def get_unique_bets(limit: int = 200) -> list:
-    """
-    Retourne les bets sans doublons.
-    Pour chaque combinaison home_team + away_team + market,
-    garde uniquement le plus récent.
-    """
     conn = get_connection()
     try:
         cur = conn.cursor()
         if is_postgres():
             cur.execute("""
-                SELECT DISTINCT ON (home_team, away_team, market)
+                SELECT DISTINCT ON (match_date, home_team, away_team, market)
                     id, match_date, league, home_team, away_team,
                     market, bookmaker, bk_odds, model_odds, probability,
                     value, success, notified, created_at
                 FROM bets
-                ORDER BY home_team, away_team, market, created_at DESC
+                ORDER BY match_date, home_team, away_team, market, created_at DESC
                 LIMIT %s
             """, (limit,))
         else:
@@ -466,7 +461,7 @@ def get_unique_bets(limit: int = 200) -> list:
                 FROM bets
                 WHERE id IN (
                     SELECT MAX(id) FROM bets
-                    GROUP BY home_team, away_team, market
+                    GROUP BY match_date, home_team, away_team, market
                 )
                 ORDER BY created_at DESC
                 LIMIT ?
