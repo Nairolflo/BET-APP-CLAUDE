@@ -238,6 +238,29 @@ def update_bet_result(bet_id: int, success: int):
         conn.close()
 
 
+def is_bet_notified(bet_id: int) -> bool:
+    conn = get_connection()
+    try:
+        cur = conn.cursor()
+        p = ph()
+        cur.execute(f"SELECT notified FROM bets WHERE id = {p}", (bet_id,))
+        row = cur.fetchone()
+        return bool(row[0]) if row else False
+    finally:
+        conn.close()
+
+
+def mark_bet_notified(bet_id: int):
+    conn = get_connection()
+    try:
+        cur = conn.cursor()
+        p = ph()
+        cur.execute(f"UPDATE bets SET notified = 1 WHERE id = {p}", (bet_id,))
+        conn.commit()
+    finally:
+        conn.close()
+
+
 def get_pending_bets() -> list:
     conn = get_connection()
     try:

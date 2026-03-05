@@ -8,7 +8,7 @@ Commandes Telegram :
   /stats   → win rate + ROI
   /refresh → forcer refresh stats équipes
   /run     → lancer l'analyse maintenant
-  /web     → lacne la page web
+  /web     → lancer la page web
 
 Commandes CLI :
   python scheduler.py run       → exécution immédiate
@@ -26,7 +26,10 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-from database import init_db, save_bet, save_team_stats, get_team_stats, get_all_bets, get_stats
+from database import (
+    init_db, save_bet, save_team_stats, get_team_stats,
+    get_all_bets, get_stats, is_bet_notified, mark_bet_notified
+)
 from api_clients import get_fixtures, get_odds, get_team_standings
 from model import calc_league_averages, calc_attack_defense_strength, predict_match, find_value_bets
 from telegram_bot import send_message, send_daily_summary
@@ -59,7 +62,7 @@ worker_state = {
 # ─────────────────────────────────────────────
 
 def refresh_team_stats(silent=False):
-    """Mise à jour des stats équipes depuis API-Sports → DB."""
+    """Mise à jour des stats équipes → DB."""
     log.info("🔄 Refresh stats équipes...")
     results = []
     for league_id in LEAGUES:
@@ -98,7 +101,8 @@ def run_value_bet_engine(silent=False):
     if not silent:
         send_message(f"🚀 <b>Analyse démarrée</b>\n📅 {now}\n🔍 Calcul en cours...")
 
-    all_value_bets = []
+    # Uniquement les NOUVEAUX bets (pas encore notifiés) à envoyer sur Telegram
+    new_value_bets = []
     errors = []
 
     for league_id in LEAGUES:
@@ -150,7 +154,6 @@ def run_value_bet_engine(silent=False):
 
         # 4. Prédiction + value pour chaque match
         for fix in fixtures:
-            home_id, away_id     = fix["home_team_id"], fix["away_team_id"]
             home_name, away_name = fix["home_team_name"], fix["away_team_name"]
 
             prediction = predict_match(home_name, away_name, strengths, avg_home, avg_away)
@@ -170,34 +173,50 @@ def run_value_bet_engine(silent=False):
 
             value_bets = find_value_bets(prediction, odds, VALUE_THRESHOLD, MIN_PROBABILITY)
             match_info = {
-                "date": fix["date"], "home_team": home_name,
-                "away_team": away_name, "league": league_name,
+                "date":      fix["date"],
+                "home_team": home_name,
+                "away_team": away_name,
+                "league":    league_name,
             }
 
             for bet in value_bets:
                 try:
                     bet_id = save_bet({
-                        "match_date": fix["date"], "league": league_name,
-                        "home_team": home_name, "away_team": away_name, **bet,
+                        "match_date": fix["date"],
+                        "league":     league_name,
+                        "home_team":  home_name,
+                        "away_team":  away_name,
+                        **bet,
                     })
-                    log.info(
-                        f"  ✅ BET #{bet_id}: {home_name} vs {away_name} | "
-                        f"{bet['market']} @ {bet['bk_odds']} | +{bet['value']*100:.1f}%"
-                    )
-                    all_value_bets.append((bet, match_info))
+
+                    # N'envoie sur Telegram que si pas encore notifié
+                    if not is_bet_notified(bet_id):
+                        log.info(
+                            f"  ✅ NOUVEAU BET #{bet_id}: {home_name} vs {away_name} | "
+                            f"{bet['market']} @ {bet['bk_odds']} | +{bet['value']*100:.1f}%"
+                        )
+                        new_value_bets.append((bet, match_info))
+                        mark_bet_notified(bet_id)
+                    else:
+                        log.info(
+                            f"  ⏭ BET #{bet_id} déjà notifié: {home_name} vs {away_name} | "
+                            f"{bet['market']} @ {bet['bk_odds']}"
+                        )
+
                 except Exception as e:
                     log.error(f"  save_bet: {e}")
 
     worker_state["last_run"]   = datetime.now(timezone.utc)
-    worker_state["bets_today"] = len(all_value_bets)
+    worker_state["bets_today"] = len(new_value_bets)
     worker_state["running"]    = False
 
-    send_daily_summary(all_value_bets, {})
+    # Envoie uniquement les nouveaux bets
+    send_daily_summary(new_value_bets, {})
 
     if errors:
         send_message("⚠️ <b>Erreurs durant l'analyse :</b>\n" + "\n".join(f"• {e}" for e in errors))
 
-    log.info(f"✅ Analyse terminée — {len(all_value_bets)} value bets.")
+    log.info(f"✅ Analyse terminée — {len(new_value_bets)} nouveaux value bets.")
 
 
 # ─────────────────────────────────────────────
@@ -212,7 +231,8 @@ def handle_help():
         "⚽ /bets    — Paris du jour\n"
         "📊 /stats   — Win rate + ROI\n"
         "⚡ /run     — Lancer une analyse\n"
-        "🔄 /refresh — Refresh stats équipes\n\n"
+        "🔄 /refresh — Refresh stats équipes\n"
+        "🌐 /web     — Page web\n\n"
         f"<i>Analyse auto : {SCHEDULER_HOUR:02d}h00 UTC chaque jour</i>"
     )
 
@@ -239,7 +259,7 @@ def handle_status():
         f"🕐 Prochaine analyse : {SCHEDULER_HOUR:02d}h00 UTC\n"
         f"⚽ Dernière analyse : {last_run.strftime('%Y-%m-%d %H:%M UTC') if last_run else 'Aucune'}\n"
         f"🔄 Dernier refresh : {last_refresh.strftime('%Y-%m-%d %H:%M UTC') if last_refresh else 'Aucun'}\n"
-        f"🎯 Bets dernière analyse : {worker_state['bets_today']}"
+        f"🎯 Nouveaux bets dernière analyse : {worker_state['bets_today']}"
     )
 
 
@@ -315,14 +335,14 @@ def handle_refresh():
     send_message("🔄 <b>Refresh des stats en cours...</b>")
     t = threading.Thread(target=refresh_team_stats, daemon=True)
     t.start()
-    
+
+
 def handle_web():
     url = os.getenv("WEB_URL", "")
     if url:
         send_message(f"🌐 <b>Interface Web ValueBet</b>\n\n👉 {url}")
     else:
         send_message("⚠️ Variable WEB_URL non configurée dans Railway.")
-
 
 
 COMMANDS = {
@@ -337,7 +357,7 @@ COMMANDS = {
 
 
 # ─────────────────────────────────────────────
-# POLLING TELEGRAM (corrigé)
+# POLLING TELEGRAM
 # ─────────────────────────────────────────────
 
 def telegram_polling():
@@ -378,7 +398,6 @@ def telegram_polling():
 
                 log.info(f"📩 Message reçu : '{text}' de {from_id}")
 
-                # Sécurité : uniquement votre chat_id
                 if TELEGRAM_CHAT and from_id != TELEGRAM_CHAT:
                     log.warning(f"  Ignoré — chat_id non autorisé : {from_id}")
                     continue
@@ -394,7 +413,7 @@ def telegram_polling():
                     handle_help()
 
         except requests.exceptions.Timeout:
-            pass  # Normal avec short polling
+            pass
         except Exception as e:
             log.error(f"Polling error: {e}")
             time.sleep(3)
@@ -410,13 +429,11 @@ def run_scheduler():
 
     worker_state["started_at"] = datetime.now(timezone.utc)
 
-    # Polling Telegram dans un thread séparé
     log.info("Démarrage thread polling Telegram...")
     poll_thread = threading.Thread(target=telegram_polling, daemon=True)
     poll_thread.start()
     log.info("Thread polling démarré ✅")
 
-    # Scheduler cron
     scheduler = BlockingScheduler(timezone="UTC")
     scheduler.add_job(
         refresh_team_stats, "cron",
