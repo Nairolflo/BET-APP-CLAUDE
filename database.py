@@ -355,7 +355,7 @@ def get_stats() -> dict:
             SELECT league,
                 COUNT(*) as total,
                 SUM(CASE WHEN success = 1 THEN 1 ELSE 0 END) as wins,
-                ROUND(AVG(value) * 100, 1) as avg_value
+                ROUND(CAST(AVG(value) * 100 AS NUMERIC), 1) as avg_value
             FROM bets
             GROUP BY league
         """)
@@ -366,7 +366,7 @@ def get_stats() -> dict:
             by_league = [dict(r) for r in cur.fetchall()]
 
         # Valeur moyenne globale
-        cur.execute("SELECT ROUND(AVG(value) * 100, 1) as avg_value FROM bets")
+        cur.execute("SELECT ROUND(CAST(AVG(value) * 100 AS NUMERIC), 1) as avg_value FROM bets")
         avg_row = cur.fetchone()
         avg_value_pct = (avg_row[0] if is_postgres() else dict(avg_row).get("avg_value")) or 0
 
