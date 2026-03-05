@@ -4,7 +4,8 @@ api_clients.py - API wrappers
 - get_fixtures()       → The Odds API (fixtures extraits des cotes)
 - get_team_standings() → FBref scraping + fallback stats
 - get_odds()           → The Odds API — Betclic/Winamax FR en priorité,
-                         fallback tous bookmakers EU si absents
+                         fallback tous bookmakers EU
+                         Marchés : h2h + totals (tous seuils)
 """
 
 import os
@@ -35,7 +36,6 @@ FBREF_HEADERS = {
     "Accept-Language": "fr-FR,fr;q=0.9,en;q=0.8",
 }
 
-# Bookmakers préférés — utilisés en priorité si disponibles
 PREFERRED_BOOKMAKERS = ["Betclic (FR)", "Winamax (FR)"]
 
 
@@ -44,20 +44,16 @@ PREFERRED_BOOKMAKERS = ["Betclic (FR)", "Winamax (FR)"]
 # ─────────────────────────────────────────────
 
 def get_fixtures(league_id: int, season: int, days_ahead: int = 3) -> list:
-    """
-    Extrait les fixtures depuis The Odds API.
-    Retourne les matchs des N prochains jours.
-    """
     sport_key = LEAGUE_SPORT_MAP.get(league_id)
     if not sport_key:
         return []
 
     url = f"{ODDS_API_BASE}/sports/{sport_key}/odds"
     params = {
-        "apiKey": os.getenv("ODDS_API_KEY", ""),
-        "regions": "eu",
-        "markets": "h2h",
-        "oddsFormat": "decimal",
+        "apiKey":      os.getenv("ODDS_API_KEY", ""),
+        "regions":     "eu",
+        "markets":     "h2h",
+        "oddsFormat":  "decimal",
     }
 
     try:
@@ -100,14 +96,10 @@ def get_fixtures(league_id: int, season: int, days_ahead: int = 3) -> list:
 
 
 # ─────────────────────────────────────────────
-# TEAM STATS — FBref scraping + fallback
+# TEAM STATS — FBref + fallback
 # ─────────────────────────────────────────────
 
 def get_team_standings(league_id: int, season: int) -> list:
-    """
-    Scrape les stats équipes depuis FBref.
-    Fallback automatique si FBref bloque (403).
-    """
     url = FBREF_LEAGUE_MAP.get(league_id)
     if not url:
         return _fallback_stats(league_id, season)
@@ -121,7 +113,6 @@ def get_team_standings(league_id: int, season: int) -> list:
 
     soup = BeautifulSoup(resp.text, "lxml")
 
-    # FBref cache les tables dans des commentaires HTML
     table = None
     comments = soup.find_all(string=lambda text: isinstance(text, Comment))
     for comment in comments:
@@ -195,13 +186,9 @@ def get_team_standings(league_id: int, season: int) -> list:
 
 
 def _fallback_stats(league_id: int, season: int) -> list:
-    """
-    Stats de fallback si FBref échoue.
-    Noms EXACTS tels que retournés par The Odds API.
-    """
     print(f"[fallback_stats] Stats moyennes — league {league_id}")
 
-    if league_id == 61:  # Ligue 1
+    if league_id == 61:
         teams_data = [
             ("Paris Saint Germain", 38, 8,  14, 12),
             ("Marseille",           30, 16, 18, 20),
@@ -224,7 +211,7 @@ def _fallback_stats(league_id: int, season: int) -> list:
             ("Paris FC",            16, 20, 12, 22),
             ("Auxerre",             18, 20, 14, 22),
         ]
-    else:  # Premier League
+    else:
         teams_data = [
             ("Manchester City",    40, 10, 14, 12),
             ("Arsenal",            36, 12, 14, 14),
@@ -265,15 +252,14 @@ def _fallback_stats(league_id: int, season: int) -> list:
 
 
 # ─────────────────────────────────────────────
-# ODDS — The Odds API
-# Betclic/Winamax FR en priorité, fallback tous bookmakers EU
+# ODDS — The Odds API (h2h + totals tous seuils)
 # ─────────────────────────────────────────────
 
 def get_odds(league_id: int) -> list:
     """
-    Fetch upcoming match odds depuis The Odds API.
-    - Si Betclic FR ou Winamax FR disponibles → utilise uniquement eux
-    - Sinon → utilise tous les bookmakers EU disponibles
+    Fetch cotes depuis The Odds API.
+    Marchés : h2h (1X2) + totals (Over/Under tous seuils disponibles).
+    Priorité Betclic FR / Winamax FR, fallback tous bookmakers EU.
     """
     sport_key = LEAGUE_SPORT_MAP.get(league_id)
     if not sport_key:
@@ -281,9 +267,9 @@ def get_odds(league_id: int) -> list:
 
     url = f"{ODDS_API_BASE}/sports/{sport_key}/odds"
     params = {
-        "apiKey": os.getenv("ODDS_API_KEY", ""),
-        "regions": "eu",
-        "markets": "h2h",
+        "apiKey":     os.getenv("ODDS_API_KEY", ""),
+        "regions":    "eu",
+        "markets":    "h2h,totals",   # ← h2h + tous les Over/Under
         "oddsFormat": "decimal",
     }
 
@@ -301,25 +287,41 @@ def get_odds(league_id: int) -> list:
         away     = event.get("away_team")
         commence = event.get("commence_time", "")[:10]
 
-        all_bookmakers   = {}
-        pref_bookmakers  = {}
+        all_bookmakers  = {}
+        pref_bookmakers = {}
 
         for bk in event.get("bookmakers", []):
             bk_name = bk.get("title", bk.get("key", "Unknown"))
+            entry   = {}
+
             for mkt in bk.get("markets", []):
-                if mkt.get("key") != "h2h":
-                    continue
-                outcomes = {o["name"]: o["price"] for o in mkt.get("outcomes", [])}
-                entry = {
-                    "home_win": outcomes.get(home),
-                    "draw":     outcomes.get("Draw"),
-                    "away_win": outcomes.get(away),
-                }
+                mkt_key = mkt.get("key")
+
+                if mkt_key == "h2h":
+                    outcomes = {o["name"]: o["price"] for o in mkt.get("outcomes", [])}
+                    entry["home_win"] = outcomes.get(home)
+                    entry["draw"]     = outcomes.get("Draw")
+                    entry["away_win"] = outcomes.get(away)
+
+                elif mkt_key == "totals":
+                    for o in mkt.get("outcomes", []):
+                        point = o.get("point")
+                        name  = o.get("name", "")
+                        price = o.get("price")
+                        if point is None or price is None:
+                            continue
+                        # Clé ex: over_2_5 / under_2_5 / over_3_5 etc.
+                        key_suffix = str(float(point)).replace(".", "_")
+                        if name.lower() == "over":
+                            entry[f"over_{key_suffix}"]  = price
+                        elif name.lower() == "under":
+                            entry[f"under_{key_suffix}"] = price
+
+            if entry:
                 all_bookmakers[bk_name] = entry
                 if bk_name in PREFERRED_BOOKMAKERS:
                     pref_bookmakers[bk_name] = entry
 
-        # Priorité : Betclic/Winamax — sinon tous les bookmakers
         final_odds = pref_bookmakers if pref_bookmakers else all_bookmakers
 
         if not final_odds:
@@ -342,5 +344,4 @@ def get_odds(league_id: int) -> list:
 # ─────────────────────────────────────────────
 
 def get_fixture_result(fixture_id) -> Optional[dict]:
-    """Non disponible sans API-Sports payant."""
     return None

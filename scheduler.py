@@ -28,8 +28,7 @@ load_dotenv()
 
 from database import (
     init_db, save_bet, save_team_stats, get_team_stats,
-    get_all_bets, get_stats, is_bet_notified, mark_bet_notified,
-    delete_today_pending_bets, get_unique_bets
+    get_all_bets, get_stats, is_bet_notified, mark_bet_notified, delete_today_pending_bets
 )
 from api_clients import get_fixtures, get_odds, get_team_standings
 from model import calc_league_averages, calc_attack_defense_strength, predict_match, find_value_bets
@@ -158,7 +157,18 @@ def run_value_bet_engine(silent=False):
         for fix in fixtures:
             home_name, away_name = fix["home_team_name"], fix["away_team_name"]
 
-            prediction = predict_match(home_name, away_name, strengths, avg_home, avg_away)
+            # Extrait les seuils Over/Under disponibles dans les cotes
+            ou_thresholds = set()
+            for bk_odds in odds_lookup.values():
+                for k in bk_odds.keys():
+                    if k.startswith("over_"):
+                        try:
+                            ou_thresholds.add(float(k.replace("over_", "").replace("_", ".")))
+                        except ValueError:
+                            pass
+            ou_thresholds = sorted(ou_thresholds) or [1.5, 2.5, 3.5, 4.5]
+
+            prediction = predict_match(home_name, away_name, strengths, avg_home, avg_away, ou_thresholds)
             if not prediction:
                 continue
 
