@@ -3,11 +3,11 @@ api_clients.py - API wrappers
 
 - get_fixtures()       → The Odds API (fixtures extraits des cotes)
 - get_team_standings() → FBref scraping + fallback stats
-- get_odds()           → The Odds API (Betclic FR + Winamax FR uniquement)
+- get_odds()           → The Odds API — Betclic/Winamax FR en priorité,
+                         fallback tous bookmakers EU si absents
 """
 
 import os
-import re
 import requests
 from datetime import datetime, timezone
 from typing import Optional
@@ -35,7 +35,7 @@ FBREF_HEADERS = {
     "Accept-Language": "fr-FR,fr;q=0.9,en;q=0.8",
 }
 
-# Seuls ces bookmakers sont utilisés
+# Bookmakers préférés — utilisés en priorité si disponibles
 PREFERRED_BOOKMAKERS = ["Betclic (FR)", "Winamax (FR)"]
 
 
@@ -45,7 +45,7 @@ PREFERRED_BOOKMAKERS = ["Betclic (FR)", "Winamax (FR)"]
 
 def get_fixtures(league_id: int, season: int, days_ahead: int = 3) -> list:
     """
-    Extrait les fixtures directement depuis The Odds API.
+    Extrait les fixtures depuis The Odds API.
     Retourne les matchs des N prochains jours.
     """
     sport_key = LEAGUE_SPORT_MAP.get(league_id)
@@ -68,8 +68,8 @@ def get_fixtures(league_id: int, season: int, days_ahead: int = 3) -> list:
         print(f"[get_fixtures] Erreur Odds API league {league_id}: {e}")
         return []
 
-    now     = datetime.now(timezone.utc)
-    cutoff  = now.timestamp() + days_ahead * 86400
+    now    = datetime.now(timezone.utc)
+    cutoff = now.timestamp() + days_ahead * 86400
 
     fixtures = []
     for i, event in enumerate(events):
@@ -106,7 +106,7 @@ def get_fixtures(league_id: int, season: int, days_ahead: int = 3) -> list:
 def get_team_standings(league_id: int, season: int) -> list:
     """
     Scrape les stats équipes depuis FBref.
-    Fallback automatique si FBref bloque.
+    Fallback automatique si FBref bloque (403).
     """
     url = FBREF_LEAGUE_MAP.get(league_id)
     if not url:
@@ -181,7 +181,7 @@ def get_team_standings(league_id: int, season: int) -> list:
         teams.append({
             "league_id":           league_id,
             "season":              season,
-            "team_id":             hash(team_name) % 100000,
+            "team_id":             abs(hash(team_name)) % 100000,
             "team_name":           team_name,
             "home_goals_scored":   home_gf,
             "home_goals_conceded": home_ga,
@@ -197,9 +197,9 @@ def get_team_standings(league_id: int, season: int) -> list:
 def _fallback_stats(league_id: int, season: int) -> list:
     """
     Stats de fallback si FBref échoue.
-    Noms calqués exactement sur ceux retournés par The Odds API.
+    Noms EXACTS tels que retournés par The Odds API.
     """
-    print(f"[fallback_stats] Utilisation stats moyennes — league {league_id}")
+    print(f"[fallback_stats] Stats moyennes — league {league_id}")
 
     if league_id == 61:  # Ligue 1
         teams_data = [
@@ -250,31 +250,30 @@ def _fallback_stats(league_id: int, season: int) -> list:
             ("Leicester City",     16, 20, 12, 22),
         ]
 
-    result = []
-    for name, hgf, hga, agf, aga in teams_data:
-        result.append({
-            "league_id":           league_id,
-            "season":              season,
-            "team_id":             hash(name) % 100000,
-            "team_name":           name,
-            "home_goals_scored":   hgf,
-            "home_goals_conceded": hga,
-            "away_goals_scored":   agf,
-            "away_goals_conceded": aga,
-            "home_games":          19,
-            "away_games":          19,
-        })
-    return result
+    return [{
+        "league_id":           league_id,
+        "season":              season,
+        "team_id":             abs(hash(name)) % 100000,
+        "team_name":           name,
+        "home_goals_scored":   hgf,
+        "home_goals_conceded": hga,
+        "away_goals_scored":   agf,
+        "away_goals_conceded": aga,
+        "home_games":          19,
+        "away_games":          19,
+    } for name, hgf, hga, agf, aga in teams_data]
 
 
 # ─────────────────────────────────────────────
-# ODDS — The Odds API (Betclic FR + Winamax FR)
+# ODDS — The Odds API
+# Betclic/Winamax FR en priorité, fallback tous bookmakers EU
 # ─────────────────────────────────────────────
 
 def get_odds(league_id: int) -> list:
     """
     Fetch upcoming match odds depuis The Odds API.
-    Filtre uniquement Betclic (FR) et Winamax (FR).
+    - Si Betclic FR ou Winamax FR disponibles → utilise uniquement eux
+    - Sinon → utilise tous les bookmakers EU disponibles
     """
     sport_key = LEAGUE_SPORT_MAP.get(league_id)
     if not sport_key:
@@ -302,30 +301,35 @@ def get_odds(league_id: int) -> list:
         away     = event.get("away_team")
         commence = event.get("commence_time", "")[:10]
 
-        bookmakers_odds = {}
+        all_bookmakers   = {}
+        pref_bookmakers  = {}
+
         for bk in event.get("bookmakers", []):
             bk_name = bk.get("title", bk.get("key", "Unknown"))
-
-            # Filtre : uniquement Betclic FR et Winamax FR
-            if bk_name not in PREFERRED_BOOKMAKERS:
-                continue
-
             for mkt in bk.get("markets", []):
                 if mkt.get("key") != "h2h":
                     continue
                 outcomes = {o["name"]: o["price"] for o in mkt.get("outcomes", [])}
-                bookmakers_odds[bk_name] = {
+                entry = {
                     "home_win": outcomes.get(home),
                     "draw":     outcomes.get("Draw"),
                     "away_win": outcomes.get(away),
                 }
+                all_bookmakers[bk_name] = entry
+                if bk_name in PREFERRED_BOOKMAKERS:
+                    pref_bookmakers[bk_name] = entry
 
-        # On inclut même si aucun bookmaker préféré disponible (matching quand même)
+        # Priorité : Betclic/Winamax — sinon tous les bookmakers
+        final_odds = pref_bookmakers if pref_bookmakers else all_bookmakers
+
+        if not final_odds:
+            continue
+
         results.append({
             "date":      commence,
             "home_team": home,
             "away_team": away,
-            "odds":      bookmakers_odds,
+            "odds":      final_odds,
             "event_id":  event.get("id"),
             "league_id": league_id,
         })
