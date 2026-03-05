@@ -22,7 +22,7 @@ ODDS_API_BASE = "https://api.the-odds-api.com/v4"
 
 LEAGUE_SPORT_MAP = {
     61: "soccer_france_ligue_one",
-    39: "soccer_england_premier_league",
+    39: "soccer_epl",
 }
 
 FBREF_LEAGUE_MAP = {
