@@ -69,8 +69,20 @@ def config_page():
         "has_footballdata_key": bool(os.getenv("FOOTBALLDATA_KEY")),
         "has_telegram_token": bool(os.getenv("TELEGRAM_BOT_TOKEN")),
         "leagues": [
-            {"id": 61, "name": "Ligue 1",        "flag": "🇫🇷"},
-            {"id": 39, "name": "Premier League",  "flag": "🏴󠁧󠁢󠁥󠁮󠁧󠁿"},
+            {"id": 39,  "name": "Premier League",      "flag": "🏴󠁧󠁢󠁥󠁮󠁧󠁿"},
+            {"id": 61,  "name": "Ligue 1",              "flag": "🇫🇷"},
+            {"id": 78,  "name": "Bundesliga",           "flag": "🇩🇪"},
+            {"id": 135, "name": "Serie A",              "flag": "🇮🇹"},
+            {"id": 140, "name": "La Liga",              "flag": "🇪🇸"},
+            {"id": 88,  "name": "Eredivisie",           "flag": "🇳🇱"},
+            {"id": 94,  "name": "Primeira Liga",        "flag": "🇵🇹"},
+            {"id": 40,  "name": "Championship",         "flag": "🏴󠁧󠁢󠁥󠁮󠁧󠁿"},
+            {"id": 2,   "name": "Champions League",     "flag": "🇪🇺"},
+            {"id": 3,   "name": "Europa League",        "flag": "🇪🇺"},
+            {"id": 144, "name": "Belgium First Div",    "flag": "🇧🇪"},
+            {"id": 203, "name": "Turkey Super League",  "flag": "🇹🇷"},
+            {"id": 179, "name": "Scottish Premiership", "flag": "🏴󠁧󠁢󠁳󠁣󠁴󠁿"},
+            {"id": 3,   "name": "Europa League",        "flag": "🇪🇺"},
         ],
     }
     return render_template("config.html", config=config)
