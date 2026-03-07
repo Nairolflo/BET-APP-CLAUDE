@@ -182,7 +182,7 @@ def predict_match(home_name: str, away_name: str, strengths: dict,
 
 
 def combine_probabilities(poisson_prob: float, market_prob: float,
-                           poisson_weight: float = 0.30) -> float:
+                           poisson_weight: float = 0.50) -> float:
     """
     Combine la probabilité Poisson et la probabilité implicite du marché.
     Poids par défaut : 30% Poisson, 70% marché.
@@ -194,16 +194,14 @@ def combine_probabilities(poisson_prob: float, market_prob: float,
 
 def find_value_bets(predictions: dict, odds: dict,
                     value_threshold: float = 0.05, min_prob: float = 0.55,
-                    poisson_weight: float = 0.30):
+                    poisson_weight: float = 0.50):
     """
-    Détecte les value bets en combinant :
-      - Probabilité Poisson (30%)
-      - Probabilité implicite des cotes (70%)
-
-    Un value bet existe quand prob_combinée > prob_implicite_brute
-    ET que la value dépasse le seuil.
-
-    Retourne UN seul bet par marché — le bookmaker avec la meilleure value.
+    Détecte les value bets de haute qualité :
+      - Probabilité Poisson (50%) + marché (50%)
+      - Cibles : favoris clairs uniquement (cote 1.40-2.30)
+      - Exclut les nuls (trop aléatoires)
+      - Privilégie Over 2.5 sur Under (plus prédictible)
+      - Objectif : 65-70% de réussite, peu de bets mais fiables
     """
     fixed_markets = {
         "home_win": "Home Win",
@@ -213,6 +211,10 @@ def find_value_bets(predictions: dict, odds: dict,
 
     best_per_market = {}
 
+    # Fourchette de cotes cibles : favoris clairs uniquement
+    MIN_ODDS = 1.40
+    MAX_ODDS = 2.30
+
     for bk_name, bk_odds in odds.items():
         # Retire la marge bookmaker pour obtenir probs vraies du marché
         market_probs = remove_bookmaker_margin(bk_odds)
@@ -220,13 +222,32 @@ def find_value_bets(predictions: dict, odds: dict,
         def check_market(market_key, market_label, poisson_p, bk_odd, market_p):
             if poisson_p is None or bk_odd is None or market_p is None:
                 return
-            if bk_odd <= 1.0:
+
+            # Filtre cotes : favoris clairs uniquement
+            if bk_odd < MIN_ODDS or bk_odd > MAX_ODDS:
                 return
 
-            # Probabilité combinée
+            # Exclut les nuls (trop aléatoires pour 65-70% de réussite)
+            if market_label == "Draw":
+                return
+
+            # Exclut Under (moins prédictible que Over)
+            if market_label.startswith("Under"):
+                return
+
+            # Exclut Over 1.5 (trop facile = value quasi nulle)
+            if market_label == "Over 1.5":
+                return
+
+            # Probabilité combinée Poisson 50% + marché 50%
             combined_p = combine_probabilities(poisson_p, market_p, poisson_weight)
 
+            # Seuil de probabilité strict pour haute fiabilité
             if combined_p < min_prob:
+                return
+
+            # Les deux modèles doivent être d accord (écart max 15%)
+            if abs(poisson_p - market_p) > 0.15:
                 return
 
             value = (bk_odd * combined_p) - 1
@@ -246,8 +267,10 @@ def find_value_bets(predictions: dict, odds: dict,
                     "value":         round(value, 4),
                 }
 
-        # 1X2
+        # 1X2 (sans Draw)
         for market_key, market_label in fixed_markets.items():
+            if market_key == "draw":
+                continue
             check_market(
                 market_key, market_label,
                 predictions.get(market_key),
@@ -255,20 +278,23 @@ def find_value_bets(predictions: dict, odds: dict,
                 market_probs.get(market_key),
             )
 
-        # Over/Under dynamiques
+        # Over uniquement (2.5 et 3.5)
         for bk_key, bk_odd in bk_odds.items():
-            if not (bk_key.startswith("over_") or bk_key.startswith("under_")):
+            if not bk_key.startswith("over_"):
                 continue
-            parts     = bk_key.split("_", 1)
-            direction = parts[0]
+            parts         = bk_key.split("_", 1)
             threshold_str = parts[1].replace("_", ".")
             try:
                 threshold = float(threshold_str)
             except ValueError:
                 continue
 
-            pred_key     = f"{direction}_{parts[1]}"
-            market_label = f"{'Over' if direction == 'over' else 'Under'} {threshold}"
+            # Uniquement Over 2.5 et Over 3.5
+            if threshold not in (2.5, 3.5):
+                continue
+
+            pred_key     = f"over_{parts[1]}"
+            market_label = f"Over {threshold}"
 
             check_market(
                 pred_key, market_label,

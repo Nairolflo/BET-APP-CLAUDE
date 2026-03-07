@@ -2,18 +2,21 @@
 scheduler.py - Value bet engine + Bot Telegram interactif
 
 Commandes Telegram :
-  /help    → liste des commandes
-  /status  → état du worker
-  /bets    → paris du jour
-  /stats   → win rate + ROI
-  /refresh → forcer refresh stats équipes
-  /run     → lancer l'analyse maintenant
-  /web     → lancer la page web
+  /help     → liste des commandes
+  /status   → etat du worker
+  /bets     → paris en base
+  /stats    → win rate + ROI par ligue
+  /run      → lancer l'analyse maintenant
+  /refresh  → refresh stats equipes
+  /results  → verifier les resultats
+  /pourcent → taux de reussite
+  /reset    → effacer tous les paris
+  /web      → lien page web
 
-Commandes CLI :
-  python scheduler.py run       → exécution immédiate
-  python scheduler.py refresh   → mise à jour stats équipes
-  python scheduler.py schedule  → démarrer worker + bot (Railway)
+Jobs automatiques :
+  06h00 UTC → refresh stats equipes
+  08h00 UTC → analyse value bets (configurable SCHEDULER_HOUR)
+  23h00 UTC → verification resultats
 """
 
 import os
@@ -28,26 +31,56 @@ load_dotenv()
 
 from database import (
     init_db, save_bet, save_team_stats, get_team_stats,
-    get_all_bets, get_stats, get_unique_bets, is_bet_notified, mark_bet_notified, delete_today_pending_bets, update_bet_result, get_pending_bets
+    get_stats, get_unique_bets, is_bet_notified, mark_bet_notified,
+    delete_today_pending_bets, update_bet_result, get_pending_bets,
+    reset_all_bets,
 )
-from api_clients import get_fixtures, get_odds, get_team_standings, get_fixtures_results_batch, get_all_results_today, normalize_team_name, get_all_results_today
-from model import calc_league_averages, calc_attack_defense_strength, predict_match, find_value_bets
+from api_clients import (
+    get_fixtures, get_odds, get_team_standings,
+    get_fixtures_results_batch, get_all_results_today, normalize_team_name,
+)
+from model import (
+    calc_league_averages, calc_attack_defense_strength,
+    predict_match, find_value_bets,
+)
 from telegram_bot import send_message, send_daily_summary
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
 log = logging.getLogger(__name__)
 
-LEAGUE_NAMES    = {61: "Ligue 1", 39: "Premier League"}
-SEASON          = int(os.getenv("SEASON", 2024))
-LEAGUES         = [int(x) for x in os.getenv("LEAGUES", "61,39").split(",")]
-VALUE_THRESHOLD = float(os.getenv("VALUE_THRESHOLD", 0.05))
+# ─────────────────────────────────────────────
+# CONFIG
+# ─────────────────────────────────────────────
+
+LEAGUE_NAMES = {
+    39:  "Premier League",
+    61:  "Ligue 1",
+    78:  "Bundesliga",
+    135: "Serie A",
+    140: "La Liga",
+    88:  "Eredivisie",
+    94:  "Primeira Liga",
+    71:  "Brasileirao",
+    40:  "Championship",
+    2:   "Champions League",
+    144: "Belgium First Div",
+    203: "Turkey Super League",
+    179: "Scottish Premiership",
+    262: "Liga MX",
+    3:   "Europa League",
+}
+
+SEASON          = int(os.getenv("SEASON", 2025))
+DEFAULT_LEAGUES = "39,61,78,135,140,88,94,40,2,144,203,179,3"
+LEAGUES         = [int(x) for x in os.getenv("LEAGUES", DEFAULT_LEAGUES).split(",")]
+VALUE_THRESHOLD = float(os.getenv("VALUE_THRESHOLD", 0.02))
 MIN_PROBABILITY = float(os.getenv("MIN_PROBABILITY", 0.55))
 DAYS_AHEAD      = int(os.getenv("SCHEDULER_DAYS_AHEAD", 10))
 SCHEDULER_HOUR  = int(os.getenv("SCHEDULER_HOUR", 8))
 TELEGRAM_TOKEN  = os.getenv("TELEGRAM_BOT_TOKEN", "")
 TELEGRAM_CHAT   = os.getenv("TELEGRAM_CHAT_ID", "")
 
-# État global du worker
+# Etat global du worker
 worker_state = {
     "started_at":   None,
     "last_run":     None,
@@ -62,32 +95,30 @@ worker_state = {
 # ─────────────────────────────────────────────
 
 def refresh_team_stats(silent=False):
-    """Mise à jour des stats équipes → DB."""
-    log.info("🔄 Refresh stats équipes...")
+    """Mise a jour des stats equipes → DB."""
+    log.info("Refresh stats equipes...")
     results = []
     for league_id in LEAGUES:
         try:
             teams = get_team_standings(league_id, SEASON)
             for t in teams:
                 save_team_stats(t)
-            msg = f"✅ {LEAGUE_NAMES.get(league_id)} : {len(teams)} équipes"
+            msg = f"✅ {LEAGUE_NAMES.get(league_id, league_id)} : {len(teams)} equipes"
             log.info(f"  {msg}")
             results.append(msg)
         except Exception as e:
-            msg = f"❌ {LEAGUE_NAMES.get(league_id)} : {e}"
+            msg = f"❌ {LEAGUE_NAMES.get(league_id, league_id)} : {e}"
             log.error(f"  {msg}")
             results.append(msg)
 
     worker_state["last_refresh"] = datetime.now(timezone.utc)
-
     if not silent:
         send_message("🔄 <b>Refresh stats terminé</b>\n\n" + "\n".join(results))
-
     return results
 
 
 def run_value_bet_engine(silent=False):
-    """Moteur principal — entièrement autonome."""
+    """Moteur principal — analyse toutes les ligues."""
     if worker_state["running"]:
         send_message("⏳ Une analyse est déjà en cours, patientez...")
         return
@@ -102,7 +133,6 @@ def run_value_bet_engine(silent=False):
     if not silent:
         send_message(f"🚀 <b>Analyse démarrée</b>\n📅 {now}\n🔍 Calcul en cours...")
 
-    # Uniquement les NOUVEAUX bets (pas encore notifiés) à envoyer sur Telegram
     new_value_bets = []
     errors = []
 
@@ -122,7 +152,7 @@ def run_value_bet_engine(silent=False):
             log.info(f"  Aucun match à venir.")
             continue
 
-        # 2. Stats équipes (avec auto-refresh si vides)
+        # 2. Stats equipes (auto-refresh si vides)
         team_stats = get_team_stats(league_id, SEASON)
         if not team_stats:
             log.warning(f"  Pas de stats — auto-refresh...")
@@ -131,7 +161,7 @@ def run_value_bet_engine(silent=False):
                 for t in teams:
                     save_team_stats(t)
                 team_stats = get_team_stats(league_id, SEASON)
-                log.info(f"  Auto-refresh OK : {len(team_stats)} équipes.")
+                log.info(f"  Auto-refresh OK : {len(team_stats)} equipes.")
             except Exception as e:
                 errors.append(f"Auto-refresh {league_name}: {e}")
                 continue
@@ -143,7 +173,7 @@ def run_value_bet_engine(silent=False):
         # 3. Cotes bookmakers
         try:
             odds_events = get_odds(league_id)
-            log.info(f"  {len(odds_events)} événements avec cotes.")
+            log.info(f"  {len(odds_events)} evenements avec cotes.")
         except Exception as e:
             errors.append(f"Cotes {league_name}: {e}")
             odds_events = []
@@ -153,11 +183,12 @@ def run_value_bet_engine(silent=False):
             key = (ev["home_team"].lower(), ev["away_team"].lower())
             odds_lookup[key] = ev["odds"]
 
-        # 4. Prédiction + value pour chaque match
+        # 4. Prediction + value pour chaque match
         for fix in fixtures:
-            home_name, away_name = fix["home_team_name"], fix["away_team_name"]
+            home_name = fix["home_team_name"]
+            away_name = fix["away_team_name"]
 
-            # Extrait les seuils Over/Under disponibles dans les cotes
+            # Seuils Over/Under disponibles dans les cotes
             ou_thresholds = set()
             for bk_odds in odds_lookup.values():
                 for k in bk_odds.keys():
@@ -172,13 +203,17 @@ def run_value_bet_engine(silent=False):
             if not prediction:
                 continue
 
+            # Cherche les cotes — exact puis fuzzy
             odds = odds_lookup.get((home_name.lower(), away_name.lower()), {})
             if not odds:
+                h_norm = normalize_team_name(home_name)
+                a_norm = normalize_team_name(away_name)
                 for (h_key, a_key), o in odds_lookup.items():
-                    if h_key in home_name.lower() or home_name.lower() in h_key:
-                        if a_key in away_name.lower() or away_name.lower() in a_key:
-                            odds = o
-                            break
+                    h_match = h_key == h_norm or h_norm in h_key or h_key in h_norm
+                    a_match = a_key == a_norm or a_norm in a_key or a_key in a_norm
+                    if h_match and a_match:
+                        odds = o
+                        break
 
             if not odds:
                 continue
@@ -200,8 +235,6 @@ def run_value_bet_engine(silent=False):
                         "away_team":  away_name,
                         **bet,
                     })
-
-                    # N'envoie sur Telegram que si pas encore notifié
                     if not is_bet_notified(bet_id):
                         log.info(
                             f"  ✅ NOUVEAU BET #{bet_id}: {home_name} vs {away_name} | "
@@ -210,11 +243,7 @@ def run_value_bet_engine(silent=False):
                         new_value_bets.append((bet, match_info))
                         mark_bet_notified(bet_id)
                     else:
-                        log.info(
-                            f"  ⏭ BET #{bet_id} déjà notifié: {home_name} vs {away_name} | "
-                            f"{bet['market']} @ {bet['bk_odds']}"
-                        )
-
+                        log.info(f"  ⏭ BET #{bet_id} deja notifie: {home_name} vs {away_name}")
                 except Exception as e:
                     log.error(f"  save_bet: {e}")
 
@@ -222,7 +251,6 @@ def run_value_bet_engine(silent=False):
     worker_state["bets_today"] = len(new_value_bets)
     worker_state["running"]    = False
 
-    # Envoie uniquement les nouveaux bets
     send_daily_summary(new_value_bets)
 
     if errors:
@@ -232,23 +260,143 @@ def run_value_bet_engine(silent=False):
 
 
 # ─────────────────────────────────────────────
+# VERIFICATION RESULTATS
+# ─────────────────────────────────────────────
+
+def check_results(silent=False):
+    """
+    Verifie les resultats des bets en attente via football-data.org.
+    Matching fuzzy par noms d'equipes + validation 1X2 et Over/Under.
+    """
+    pending = get_pending_bets()
+    if not pending:
+        if not silent:
+            send_message("📭 Aucun bet en attente à vérifier.")
+        return
+
+    log.info(f"🔍 Vérification de {len(pending)} bets en attente...")
+
+    updated_won  = []
+    updated_lost = []
+
+    from collections import defaultdict
+    by_date = defaultdict(list)
+    for bet in pending:
+        by_date[bet["match_date"]].append(bet)
+
+    # Mapping league name → league_id pour get_fixtures_results_batch
+    league_name_to_id = {v: k for k, v in LEAGUE_NAMES.items()}
+
+    def fuzzy_match(name1: str, name2: str) -> bool:
+        n1 = normalize_team_name(name1)
+        n2 = normalize_team_name(name2)
+        if n1 == n2:
+            return True
+        if n1 in n2 or n2 in n1:
+            return True
+        for word in ["fc", "af", "sc", "afc", "cf", "rc", "as", "ac", "us", "oc"]:
+            n1 = n1.replace(f" {word}", "").replace(f"{word} ", "")
+            n2 = n2.replace(f" {word}", "").replace(f"{word} ", "")
+        return n1.strip() == n2.strip() or n1.strip() in n2.strip() or n2.strip() in n1.strip()
+
+    def find_result(results: dict, home_bet: str, away_bet: str):
+        for (h_key, a_key), result in results.items():
+            if fuzzy_match(home_bet, h_key) and fuzzy_match(away_bet, a_key):
+                return result
+        return None
+
+    for match_date, bets in by_date.items():
+        # Source 1 : tous les resultats du jour
+        all_results = get_all_results_today(match_date)
+
+        # Source 2 : par ligue specifique (complement)
+        for bet in bets:
+            league_id = league_name_to_id.get(bet.get("league", ""))
+            if league_id:
+                extra = get_fixtures_results_batch(league_id, SEASON, match_date)
+                all_results.update(extra)
+
+        if not all_results:
+            log.info(f"  Pas de resultats pour le {match_date}")
+            continue
+
+        for bet in bets:
+            result = find_result(all_results, bet["home_team"], bet["away_team"])
+            if not result:
+                log.info(f"  Resultat non trouve: {bet['home_team']} vs {bet['away_team']} ({match_date})")
+                continue
+
+            hg      = result["home_goals"]
+            ag      = result["away_goals"]
+            total   = result["total_goals"]
+            market  = bet["market"]
+            success = None
+
+            if market == "Home Win":
+                success = 1 if hg > ag else 0
+            elif market == "Away Win":
+                success = 1 if ag > hg else 0
+            elif market == "Draw":
+                success = 1 if hg == ag else 0
+            elif market.startswith("Over "):
+                try:
+                    success = 1 if total > float(market.split(" ")[1]) else 0
+                except ValueError:
+                    pass
+            elif market.startswith("Under "):
+                try:
+                    success = 1 if total < float(market.split(" ")[1]) else 0
+                except ValueError:
+                    pass
+
+            if success is not None:
+                update_bet_result(bet["id"], success)
+                score_str = f"{hg}-{ag}"
+                if success == 1:
+                    updated_won.append({**bet, "score": score_str})
+                    log.info(f"  ✅ GAGNÉ: {bet['home_team']} vs {bet['away_team']} | {market} ({score_str})")
+                else:
+                    updated_lost.append({**bet, "score": score_str})
+                    log.info(f"  ❌ PERDU: {bet['home_team']} vs {bet['away_team']} | {market} ({score_str})")
+
+    if not updated_won and not updated_lost:
+        log.info("  Aucun resultat disponible pour le moment.")
+        if not silent:
+            send_message("⏳ Résultats pas encore disponibles — les matchs ne sont peut-être pas encore terminés.")
+        return
+
+    msg = "📊 <b>Résultats mis à jour</b>\n\n"
+    if updated_won:
+        msg += f"✅ <b>Gagnés ({len(updated_won)}) :</b>\n"
+        for b in updated_won:
+            msg += f"  • {b['home_team']} vs {b['away_team']} — {b['market']} @ {b['bk_odds']} ({b['score']})\n"
+    if updated_lost:
+        msg += f"\n❌ <b>Perdus ({len(updated_lost)}) :</b>\n"
+        for b in updated_lost:
+            msg += f"  • {b['home_team']} vs {b['away_team']} — {b['market']} @ {b['bk_odds']} ({b['score']})\n"
+
+    if not silent:
+        send_message(msg)
+    log.info(f"✅ {len(updated_won)} gagnés, {len(updated_lost)} perdus.")
+
+
+# ─────────────────────────────────────────────
 # COMMANDES TELEGRAM
 # ─────────────────────────────────────────────
 
 def handle_help():
     send_message(
         "🤖 <b>ValueBet Bot — Commandes</b>\n\n"
-        "❓ /help    — Ce message\n"
-        "📡 /status  — État du worker\n"
-        "⚽ /bets    — Paris du jour\n"
-        "📊 /stats   — Win rate + ROI\n"
-        "⚡ /run     — Lancer une analyse\n"
-        "🔄 /refresh — Refresh stats équipes\n"
-        "🌐 /web      — Page web\n"\
-        "🏆 /results  — Vérifier les résultats\n"\
-        "📈 /pourcent — Taux de réussite\n"\
-        "🗑 /reset    — Effacer tous les paris\n"\
-        "🏆 /results — Vérifier les résultats\n\n"
+        "❓ /help     — Ce message\n"
+        "📡 /status   — État du worker\n"
+        "⚽ /bets     — Tous les paris en base\n"
+        "📊 /stats    — Win rate + ROI par ligue\n"
+        "📈 /pourcent — Taux de réussite rapide\n"
+        "⚡ /run      — Lancer une analyse\n"
+        "🔄 /refresh  — Refresh stats équipes\n"
+        "🏆 /results  — Vérifier les résultats\n"
+        "🌐 /web      — Lien page web\n"
+        "🗑 /reset    — Effacer tous les paris\n\n"
         f"<i>Analyse auto : {SCHEDULER_HOUR:02d}h00 UTC chaque jour</i>"
     )
 
@@ -266,7 +414,6 @@ def handle_status():
         uptime = f"{h}h {m:02d}m"
 
     etat = "🔄 Analyse en cours..." if worker_state["running"] else "🟢 En attente"
-
     send_message(
         f"📡 <b>Status du Worker</b>\n\n"
         f"État : {etat}\n"
@@ -281,14 +428,9 @@ def handle_status():
 
 def handle_bets():
     bets = get_unique_bets(limit=100)
-
     if not bets:
-        send_message(
-            "📭 <b>Aucun value bet en base.</b>\n"
-            "💡 Tapez /run pour lancer une analyse."
-        )
+        send_message("📭 <b>Aucun value bet en base.</b>\n💡 Tapez /run pour lancer une analyse.")
         return
-
     msg = f"⚽ <b>Tous les value bets</b> — {len(bets)} sélection(s)\n{'─'*32}\n\n"
     for b in bets[:20]:
         status = "✅" if b["success"] == 1 else "❌" if b["success"] == 0 else "⏳"
@@ -300,7 +442,6 @@ def handle_bets():
             f"   🏦 {b['bookmaker']}\n\n"
         )
     send_message(msg)
-
 
 
 def handle_stats():
@@ -321,7 +462,6 @@ def handle_stats():
     roi      = o.get("roi") or 0
     wr       = o.get("win_rate") or 0
     roi_sign = "+" if roi >= 0 else ""
-
     send_message(
         f"📊 <b>Statistiques ValueBet</b>\n\n"
         f"🎯 Paris totaux : <b>{o.get('total') or 0}</b>\n"
@@ -335,46 +475,9 @@ def handle_stats():
     )
 
 
-def handle_run():
-    send_message(
-        "⚡ <b>Analyse manuelle lancée !</b>\n"
-        "Résultats dans quelques secondes...\n\n"
-        "💡 Tapez /bets après pour voir les sélections."
-    )
-    t = threading.Thread(target=run_value_bet_engine, daemon=True)
-    t.start()
-
-
-def handle_refresh():
-    send_message("🔄 <b>Refresh des stats en cours...</b>")
-    t = threading.Thread(target=refresh_team_stats, daemon=True)
-    t.start()
-
-
-def handle_web():
-    url = os.getenv("WEB_URL", "")
-    if url:
-        send_message(f"🌐 <b>Interface Web ValueBet</b>\n\n👉 {url}")
-    else:
-        send_message("⚠️ Variable WEB_URL non configurée dans Railway.")
-
-
-
-def handle_results():
-    send_message("🔍 <b>Vérification des résultats en cours...</b>")
-    t = threading.Thread(target=check_results, daemon=True)
-    t.start()
-
-def handle_reset():
-    send_message("⚠️ <b>Suppression de tous les paris en cours...</b>")
-    from database import reset_all_bets
-    count = reset_all_bets()
-    send_message(f"🗑 <b>Reset effectué</b> — {count} paris supprimés.\n\nBase de données vierge ✅")
-
 def handle_pourcent():
-    from database import get_stats
-    stats = get_stats()
-    o = stats["overall"]
+    stats   = get_stats()
+    o       = stats["overall"]
     total   = o.get("total") or 0
     wins    = o.get("wins") or 0
     losses  = o.get("losses") or 0
@@ -397,17 +500,53 @@ def handle_pourcent():
     )
 
 
+def handle_run():
+    send_message(
+        "⚡ <b>Analyse manuelle lancée !</b>\n"
+        "Résultats dans quelques secondes...\n\n"
+        "💡 Tapez /bets après pour voir les sélections."
+    )
+    t = threading.Thread(target=run_value_bet_engine, daemon=True)
+    t.start()
+
+
+def handle_refresh():
+    send_message("🔄 <b>Refresh des stats en cours...</b>")
+    t = threading.Thread(target=refresh_team_stats, daemon=True)
+    t.start()
+
+
+def handle_results():
+    send_message("🔍 <b>Vérification des résultats en cours...</b>")
+    t = threading.Thread(target=check_results, daemon=True)
+    t.start()
+
+
+def handle_reset():
+    send_message("⚠️ <b>Suppression de tous les paris en cours...</b>")
+    count = reset_all_bets()
+    send_message(f"🗑 <b>Reset effectué</b> — {count} paris supprimés.\n\nBase de données vierge ✅")
+
+
+def handle_web():
+    url = os.getenv("WEB_URL", "")
+    if url:
+        send_message(f"🌐 <b>Interface Web ValueBet</b>\n\n👉 {url}")
+    else:
+        send_message("⚠️ Variable WEB_URL non configurée dans Railway.")
+
+
 COMMANDS = {
-    "/help":    handle_help,
-    "/status":  handle_status,
-    "/bets":    handle_bets,
-    "/stats":   handle_stats,
-    "/run":     handle_run,
-    "/refresh": handle_refresh,
-    "/web":     handle_web,
+    "/help":     handle_help,
+    "/status":   handle_status,
+    "/bets":     handle_bets,
+    "/stats":    handle_stats,
+    "/pourcent": handle_pourcent,
+    "/run":      handle_run,
+    "/refresh":  handle_refresh,
     "/results":  handle_results,
     "/reset":    handle_reset,
-    "/pourcent": handle_pourcent,
+    "/web":      handle_web,
 }
 
 
@@ -416,7 +555,7 @@ COMMANDS = {
 # ─────────────────────────────────────────────
 
 def telegram_polling():
-    """Écoute les messages Telegram — short polling robuste."""
+    """Ecoute les messages Telegram — short polling robuste."""
     if not TELEGRAM_TOKEN:
         log.warning("⚠️ TELEGRAM_BOT_TOKEN manquant — polling désactivé.")
         return
@@ -426,9 +565,9 @@ def telegram_polling():
 
     log.info(f"📲 Telegram polling démarré — chat_id autorisé : {TELEGRAM_CHAT}")
 
-    # Vider les anciens messages au démarrage
+    # Vider les anciens messages au demarrage
     try:
-        resp = requests.get(f"{base_url}/getUpdates", params={"offset": -1}, timeout=10)
+        resp    = requests.get(f"{base_url}/getUpdates", params={"offset": -1}, timeout=10)
         results = resp.json().get("result", [])
         if results:
             offset = results[-1]["update_id"] + 1
@@ -478,139 +617,8 @@ def telegram_polling():
 # SCHEDULER PRINCIPAL
 # ─────────────────────────────────────────────
 
-
-def check_results(silent=False):
-    """
-    Vérifie les résultats des bets en attente via football-data.org.
-    Matching par noms d'équipes (fuzzy) + validation 1X2 et Over/Under.
-    """
-
-
-    pending = get_pending_bets()
-    if not pending:
-        if not silent:
-            send_message("📭 Aucun bet en attente à vérifier.")
-        return
-
-    log.info(f"🔍 Vérification de {len(pending)} bets en attente...")
-
-    updated_won  = []
-    updated_lost = []
-
-    # Groupe les bets par date de match
-    from collections import defaultdict
-    by_date = defaultdict(list)
-    for bet in pending:
-        by_date[bet["match_date"]].append(bet)
-
-    league_id_map = {"Ligue 1": 61, "Premier League": 39}
-
-    def fuzzy_match(name1: str, name2: str) -> bool:
-        """Vérifie si deux noms d'équipes correspondent approximativement."""
-        n1 = normalize_team_name(name1)
-        n2 = normalize_team_name(name2)
-        if n1 == n2:
-            return True
-        if n1 in n2 or n2 in n1:
-            return True
-        # Enlève mots communs
-        for word in ["fc", "af", "sc", "afc", "cf", "rc", "as", "ac", "us", "oc"]:
-            n1 = n1.replace(f" {word}", "").replace(f"{word} ", "")
-            n2 = n2.replace(f" {word}", "").replace(f"{word} ", "")
-        return n1.strip() == n2.strip() or n1.strip() in n2.strip() or n2.strip() in n1.strip()
-
-    def find_result(results: dict, home_bet: str, away_bet: str):
-        """Cherche le résultat d'un match par noms approximatifs."""
-        for (h_key, a_key), result in results.items():
-            if fuzzy_match(home_bet, h_key) and fuzzy_match(away_bet, a_key):
-                return result
-        return None
-
-    for match_date, bets in by_date.items():
-        # Récupère tous les résultats du jour (toutes ligues)
-        all_results = get_all_results_today(match_date)
-
-        # Aussi par ligue spécifique si dispo
-        league_results = {}
-        for bet in bets:
-            league_id = league_id_map.get(bet.get("league", ""))
-            if league_id and league_id not in league_results:
-                league_results.update(
-                    get_fixtures_results_batch(league_id, SEASON, match_date)
-                )
-
-        # Merge des deux sources
-        all_results.update(league_results)
-
-        if not all_results:
-            log.info(f"  Pas de résultats pour le {match_date}")
-            continue
-
-        for bet in bets:
-            result = find_result(all_results, bet["home_team"], bet["away_team"])
-            if not result:
-                log.info(f"  Résultat non trouvé: {bet['home_team']} vs {bet['away_team']} ({match_date})")
-                continue
-
-            home_goals  = result["home_goals"]
-            away_goals  = result["away_goals"]
-            total_goals = result["total_goals"]
-            market      = bet["market"]
-            success     = None
-
-            if market == "Home Win":
-                success = 1 if home_goals > away_goals else 0
-            elif market == "Away Win":
-                success = 1 if away_goals > home_goals else 0
-            elif market == "Draw":
-                success = 1 if home_goals == away_goals else 0
-            elif market.startswith("Over "):
-                try:
-                    threshold = float(market.split(" ")[1])
-                    success = 1 if total_goals > threshold else 0
-                except ValueError:
-                    pass
-            elif market.startswith("Under "):
-                try:
-                    threshold = float(market.split(" ")[1])
-                    success = 1 if total_goals < threshold else 0
-                except ValueError:
-                    pass
-
-            if success is not None:
-                update_bet_result(bet["id"], success)
-                score_str = f"{home_goals}-{away_goals}"
-                if success == 1:
-                    updated_won.append({**bet, "score": score_str})
-                    log.info(f"  ✅ GAGNÉ: {bet['home_team']} vs {bet['away_team']} | {market} ({score_str})")
-                else:
-                    updated_lost.append({**bet, "score": score_str})
-                    log.info(f"  ❌ PERDU: {bet['home_team']} vs {bet['away_team']} | {market} ({score_str})")
-
-    if not updated_won and not updated_lost:
-        log.info("  Aucun résultat disponible pour le moment.")
-        if not silent:
-            send_message("⏳ Résultats pas encore disponibles — les matchs ne sont peut-être pas encore terminés.")
-        return
-
-    msg = "📊 <b>Résultats mis à jour</b>\n\n"
-    if updated_won:
-        msg += f"✅ <b>Gagnés ({len(updated_won)}) :</b>\n"
-        for b in updated_won:
-            msg += f"  • {b['home_team']} vs {b['away_team']} — {b['market']} @ {b['bk_odds']} ({b['score']})\n"
-    if updated_lost:
-        msg += f"\n❌ <b>Perdus ({len(updated_lost)}) :</b>\n"
-        for b in updated_lost:
-            msg += f"  • {b['home_team']} vs {b['away_team']} — {b['market']} @ {b['bk_odds']} ({b['score']})\n"
-
-    if not silent:
-        send_message(msg)
-
-    log.info(f"✅ {len(updated_won)} gagnés, {len(updated_lost)} perdus.")
-
-
 def run_scheduler():
-    """Démarre APScheduler + polling Telegram en parallèle."""
+    """Demarre APScheduler + polling Telegram en parallele."""
     from apscheduler.schedulers.blocking import BlockingScheduler
 
     worker_state["started_at"] = datetime.now(timezone.utc)
@@ -637,12 +645,14 @@ def run_scheduler():
         kwargs={"silent": False}
     )
 
-    log.info(f"⏰ Scheduler démarré — refresh 06h UTC, analyse {SCHEDULER_HOUR:02d}h UTC")
+    log.info(f"⏰ Scheduler démarré — refresh 06h UTC, analyse {SCHEDULER_HOUR:02d}h UTC, résultats 23h UTC")
 
     send_message(
         f"✅ <b>Worker ValueBet démarré !</b>\n\n"
         f"⏰ Refresh stats : 06h00 UTC\n"
         f"⚽ Analyse value bets : {SCHEDULER_HOUR:02d}h00 UTC\n"
+        f"📊 Vérification résultats : 23h00 UTC\n"
+        f"🏆 Ligues : {len(LEAGUES)} compétitions\n"
         f"📅 {datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M UTC')}\n\n"
         f"💬 Tapez /help pour voir les commandes."
     )
@@ -663,7 +673,7 @@ if __name__ == "__main__":
 
     init_db()
 
-    command = sys.argv[1] if len(sys.argv) > 1 else "run"
+    command = sys.argv[1] if len(sys.argv) > 1 else "schedule"
 
     if command == "refresh":
         refresh_team_stats()
@@ -671,11 +681,8 @@ if __name__ == "__main__":
         run_scheduler()
     elif command == "run":
         run_value_bet_engine()
+    elif command == "results":
+        check_results()
     else:
         print(f"Commande inconnue : {command}")
-        print("Usage: python scheduler.py [run|refresh|schedule]")
-
-
-# ─────────────────────────────────────────────
-# VÉRIFICATION AUTOMATIQUE DES RÉSULTATS
-# ─────────────────────────────────────────────
+        print("Usage: python scheduler.py [run|refresh|schedule|results]")
