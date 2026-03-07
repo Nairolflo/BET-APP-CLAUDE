@@ -30,7 +30,7 @@ from database import (
     init_db, save_bet, save_team_stats, get_team_stats,
     get_all_bets, get_stats, get_unique_bets, is_bet_notified, mark_bet_notified, delete_today_pending_bets, update_bet_result, get_pending_bets
 )
-from api_clients import get_fixtures, get_odds, get_team_standings, get_fixtures_results_batch, get_all_results_today
+from api_clients import get_fixtures, get_odds, get_team_standings, get_fixtures_results_batch, get_all_results_today, normalize_team_name, get_all_results_today
 from model import calc_league_averages, calc_attack_defense_strength, predict_match, find_value_bets
 from telegram_bot import send_message, send_daily_summary
 
@@ -42,7 +42,7 @@ SEASON          = int(os.getenv("SEASON", 2024))
 LEAGUES         = [int(x) for x in os.getenv("LEAGUES", "61,39").split(",")]
 VALUE_THRESHOLD = float(os.getenv("VALUE_THRESHOLD", 0.05))
 MIN_PROBABILITY = float(os.getenv("MIN_PROBABILITY", 0.55))
-DAYS_AHEAD      = int(os.getenv("SCHEDULER_DAYS_AHEAD", 3))
+DAYS_AHEAD      = int(os.getenv("SCHEDULER_DAYS_AHEAD", 10))
 SCHEDULER_HOUR  = int(os.getenv("SCHEDULER_HOUR", 8))
 TELEGRAM_TOKEN  = os.getenv("TELEGRAM_BOT_TOKEN", "")
 TELEGRAM_CHAT   = os.getenv("TELEGRAM_CHAT_ID", "")
@@ -507,11 +507,10 @@ def check_results(silent=False):
 
     def fuzzy_match(name1: str, name2: str) -> bool:
         """Vérifie si deux noms d'équipes correspondent approximativement."""
-        n1 = name1.lower().strip()
-        n2 = name2.lower().strip()
+        n1 = normalize_team_name(name1)
+        n2 = normalize_team_name(name2)
         if n1 == n2:
             return True
-        # Correspondance partielle
         if n1 in n2 or n2 in n1:
             return True
         # Enlève mots communs
@@ -609,8 +608,6 @@ def check_results(silent=False):
 
     log.info(f"✅ {len(updated_won)} gagnés, {len(updated_lost)} perdus.")
 
-
-    log.info(f"✅ {len(updated_won)} gagnés, {len(updated_lost)} perdus.")
 
 def run_scheduler():
     """Démarre APScheduler + polling Telegram en parallèle."""
