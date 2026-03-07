@@ -1,18 +1,19 @@
 """
 api_clients.py - API wrappers
 
-- get_fixtures()       → The Odds API (fixtures extraits des cotes)
-- get_team_standings() → FBref scraping + fallback stats
-- get_odds()           → The Odds API — Betclic/Winamax FR en priorité,
-                         fallback tous bookmakers EU
-                         Marchés : h2h + totals (tous seuils)
+- get_fixtures()         → The Odds API (fixtures extraits des cotes)
+- get_team_standings()   → football-data.org standings réels + fallback stats
+- get_odds()             → The Odds API — Betclic/Winamax FR en priorité,
+                           fallback tous bookmakers EU
+                           Marchés : h2h + totals (tous seuils)
+- get_all_results_today()→ football-data.org résultats du jour
+- normalize_team_name()  → normalisation noms équipes pour matching
 """
 
 import os
 import requests
 from datetime import datetime, timezone
 from typing import Optional
-from bs4 import BeautifulSoup, Comment
 
 
 # ─────────────────────────────────────────────
@@ -26,34 +27,90 @@ LEAGUE_SPORT_MAP = {
     39: "soccer_epl",
 }
 
-FBREF_LEAGUE_MAP = {
-    61: "https://fbref.com/en/comps/13/Ligue-1-Stats",
-    39: "https://fbref.com/en/comps/9/Premier-League-Stats",
-}
-
-FBREF_HEADERS = {
-    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120.0.0.0 Safari/537.36",
-    "Accept-Language": "fr-FR,fr;q=0.9,en;q=0.8",
-}
-
 PREFERRED_BOOKMAKERS = ["Betclic (FR)", "Winamax (FR)"]
 
+FOOTBALLDATA_BASE = "https://api.football-data.org/v4"
+
+FOOTBALLDATA_LEAGUE_MAP = {
+    39: "PL",
+    61: "FL1",
+}
+
+TEAM_NAME_MAP = {
+    'fc nantes': 'nantes',
+    'angers sco': 'angers',
+    'aj auxerre': 'auxerre',
+    'rc strasbourg alsace': 'strasbourg',
+    'toulouse fc': 'toulouse',
+    'olympique de marseille': 'marseille',
+    'olympique lyonnais': 'lyon',
+    'paris saint-germain fc': 'paris saint germain',
+    'stade rennais fc': 'rennes',
+    'losc lille': 'lille',
+    'ogc nice': 'nice',
+    'as monaco fc': 'as monaco',
+    'rc lens': 'rc lens',
+    'stade brestois 29': 'brest',
+    'stade de reims': 'reims',
+    'le havre ac': 'le havre',
+    'montpellier hsc': 'montpellier',
+    'manchester city fc': 'manchester city',
+    'arsenal fc': 'arsenal',
+    'liverpool fc': 'liverpool',
+    'chelsea fc': 'chelsea',
+    'tottenham hotspur fc': 'tottenham hotspur',
+    'manchester united fc': 'manchester united',
+    'newcastle united fc': 'newcastle united',
+    'aston villa fc': 'aston villa',
+    'west ham united fc': 'west ham united',
+    'brighton & hove albion fc': 'brighton',
+    'wolverhampton wanderers fc': 'wolverhampton wanderers',
+    'fulham fc': 'fulham',
+    'brentford fc': 'brentford',
+    'crystal palace fc': 'crystal palace',
+    'everton fc': 'everton',
+    'nottingham forest fc': 'nottingham forest',
+    'bournemouth afc': 'bournemouth',
+    'ipswich town fc': 'ipswich town',
+    'leicester city fc': 'leicester city',
+    'sunderland afc': 'sunderland',
+}
+
 
 # ─────────────────────────────────────────────
-# FIXTURES — depuis The Odds API
+# UTILS
 # ─────────────────────────────────────────────
 
-def get_fixtures(league_id: int, season: int, days_ahead: int = 3) -> list:
+def normalize_team_name(name: str) -> str:
+    """Normalise un nom d'equipe pour le matching."""
+    n = name.lower().strip()
+    if n in TEAM_NAME_MAP:
+        return TEAM_NAME_MAP[n]
+    for suffix in [' fc', ' afc', ' sc', ' cf', ' ac', ' rc', ' as', ' us']:
+        if n.endswith(suffix):
+            n = n[:-len(suffix)].strip()
+    return n
+
+
+def _footballdata_headers() -> dict:
+    return {"X-Auth-Token": os.getenv("FOOTBALLDATA_KEY", "")}
+
+
+# ─────────────────────────────────────────────
+# FIXTURES
+# ─────────────────────────────────────────────
+
+def get_fixtures(league_id: int, season: int, days_ahead: int = 10) -> list:
     sport_key = LEAGUE_SPORT_MAP.get(league_id)
     if not sport_key:
         return []
 
     url = f"{ODDS_API_BASE}/sports/{sport_key}/odds"
     params = {
-        "apiKey":      os.getenv("ODDS_API_KEY", ""),
-        "regions":     "eu",
-        "markets":     "h2h",
-        "oddsFormat":  "decimal",
+        "apiKey":     os.getenv("ODDS_API_KEY", ""),
+        "regions":    "eu",
+        "markets":    "h2h",
+        "oddsFormat": "decimal",
     }
 
     try:
@@ -76,7 +133,7 @@ def get_fixtures(league_id: int, season: int, days_ahead: int = 3) -> list:
         except Exception:
             continue
 
-        if commence_ts < now.timestamp() or commence_ts > cutoff:
+        if commence_ts < now.timestamp() - 10800 or commence_ts > cutoff:
             continue
 
         home = event.get("home_team", "")
@@ -96,93 +153,67 @@ def get_fixtures(league_id: int, season: int, days_ahead: int = 3) -> list:
 
 
 # ─────────────────────────────────────────────
-# TEAM STATS — FBref + fallback
+# TEAM STANDINGS
 # ─────────────────────────────────────────────
 
 def get_team_standings(league_id: int, season: int) -> list:
-    url = FBREF_LEAGUE_MAP.get(league_id)
-    if not url:
-        return _fallback_stats(league_id, season)
+    """Standings via football-data.org. Fallback sur stats moyennes."""
+    competition = FOOTBALLDATA_LEAGUE_MAP.get(league_id)
+    key = os.getenv("FOOTBALLDATA_KEY", "")
 
-    try:
-        resp = requests.get(url, headers=FBREF_HEADERS, timeout=20)
-        resp.raise_for_status()
-    except Exception as e:
-        print(f"[get_team_standings] Erreur FBref league {league_id}: {e}")
-        return _fallback_stats(league_id, season)
+    if competition and key:
+        try:
+            url = f"{FOOTBALLDATA_BASE}/competitions/{competition}/standings"
+            resp = requests.get(url, headers={"X-Auth-Token": key}, timeout=15)
+            resp.raise_for_status()
+            data = resp.json()
+            standings = data.get("standings", [])
 
-    soup = BeautifulSoup(resp.text, "lxml")
+            table = None
+            for s in standings:
+                if s.get("type") == "TOTAL":
+                    table = s.get("table", [])
+                    break
+            if not table and standings:
+                table = standings[0].get("table", [])
 
-    table = None
-    comments = soup.find_all(string=lambda text: isinstance(text, Comment))
-    for comment in comments:
-        if "stats_squads_standard_for" in comment:
-            inner = BeautifulSoup(comment, "lxml")
-            table = inner.find("table", {"id": "stats_squads_standard_for"})
             if table:
-                break
+                teams = []
+                for entry in table:
+                    team_name = entry.get("team", {}).get("name", "")
+                    if not team_name:
+                        continue
+                    games_played  = entry.get("playedGames", 0)
+                    goals_for     = entry.get("goalsFor", 0)
+                    goals_against = entry.get("goalsAgainst", 0)
+                    if games_played == 0:
+                        continue
+                    home_games = games_played // 2
+                    away_games = games_played - home_games
+                    home_gf    = int(goals_for * 0.55)
+                    away_gf    = goals_for - home_gf
+                    home_ga    = int(goals_against * 0.45)
+                    away_ga    = goals_against - home_ga
+                    normalized_name = normalize_team_name(team_name)
+                    teams.append({
+                        "league_id":           league_id,
+                        "season":              season,
+                        "team_id":             abs(hash(normalized_name)) % 100000,
+                        "team_name":           normalized_name,
+                        "home_goals_scored":   home_gf,
+                        "home_goals_conceded": home_ga,
+                        "away_goals_scored":   away_gf,
+                        "away_goals_conceded": away_ga,
+                        "home_games":          home_games,
+                        "away_games":          away_games,
+                    })
+                if teams:
+                    print(f"[get_team_standings] {len(teams)} equipes via football-data.org league {league_id}")
+                    return teams
+        except Exception as e:
+            print(f"[get_team_standings] Erreur football-data.org league {league_id}: {e}")
 
-    if not table:
-        table = soup.find("table", {"id": "stats_squads_standard_for"})
-
-    if not table:
-        print(f"[get_team_standings] Table FBref introuvable — fallback league {league_id}")
-        return _fallback_stats(league_id, season)
-
-    teams = []
-    tbody = table.find("tbody")
-    if not tbody:
-        return _fallback_stats(league_id, season)
-
-    for row in tbody.find_all("tr"):
-        if "thead" in row.get("class", []):
-            continue
-
-        team_cell = row.find("td", {"data-stat": "team"})
-        if not team_cell:
-            continue
-
-        team_name = team_cell.get_text(strip=True)
-        if not team_name:
-            continue
-
-        def safe_int(stat_name):
-            cell = row.find("td", {"data-stat": stat_name})
-            if not cell:
-                return 0
-            try:
-                return int(float(cell.get_text(strip=True) or 0))
-            except Exception:
-                return 0
-
-        games         = safe_int("games")
-        goals_for     = safe_int("goals")
-        goals_against = safe_int("goals_against")
-
-        if games == 0:
-            continue
-
-        home_games = games // 2
-        away_games = games - home_games
-        home_gf    = int(goals_for * 0.55)
-        away_gf    = goals_for - home_gf
-        home_ga    = int(goals_against * 0.45)
-        away_ga    = goals_against - home_ga
-
-        teams.append({
-            "league_id":           league_id,
-            "season":              season,
-            "team_id":             abs(hash(team_name)) % 100000,
-            "team_name":           team_name,
-            "home_goals_scored":   home_gf,
-            "home_goals_conceded": home_ga,
-            "away_goals_scored":   away_gf,
-            "away_goals_conceded": away_ga,
-            "home_games":          home_games,
-            "away_games":          away_games,
-        })
-
-    return teams if teams else _fallback_stats(league_id, season)
+    return _fallback_stats(league_id, season)
 
 
 def _fallback_stats(league_id: int, season: int) -> list:
@@ -252,15 +283,11 @@ def _fallback_stats(league_id: int, season: int) -> list:
 
 
 # ─────────────────────────────────────────────
-# ODDS — The Odds API (h2h + totals tous seuils)
+# ODDS
 # ─────────────────────────────────────────────
 
 def get_odds(league_id: int) -> list:
-    """
-    Fetch cotes depuis The Odds API.
-    Marchés : h2h (1X2) + totals (Over/Under tous seuils disponibles).
-    Priorité Betclic FR / Winamax FR, fallback tous bookmakers EU.
-    """
+    """Cotes depuis The Odds API. Marches h2h + totals (tous seuils O/U)."""
     sport_key = LEAGUE_SPORT_MAP.get(league_id)
     if not sport_key:
         return []
@@ -269,7 +296,7 @@ def get_odds(league_id: int) -> list:
     params = {
         "apiKey":     os.getenv("ODDS_API_KEY", ""),
         "regions":    "eu",
-        "markets":    "h2h,totals",   # ← h2h + tous les Over/Under
+        "markets":    "h2h,totals",
         "oddsFormat": "decimal",
     }
 
@@ -310,7 +337,6 @@ def get_odds(league_id: int) -> list:
                         price = o.get("price")
                         if point is None or price is None:
                             continue
-                        # Clé ex: over_2_5 / under_2_5 / over_3_5 etc.
                         key_suffix = str(float(point)).replace(".", "_")
                         if name.lower() == "over":
                             entry[f"over_{key_suffix}"]  = price
@@ -323,7 +349,6 @@ def get_odds(league_id: int) -> list:
                     pref_bookmakers[bk_name] = entry
 
         final_odds = pref_bookmakers if pref_bookmakers else all_bookmakers
-
         if not final_odds:
             continue
 
@@ -340,33 +365,11 @@ def get_odds(league_id: int) -> list:
 
 
 # ─────────────────────────────────────────────
-# FIXTURE RESULT
+# RESULTATS — football-data.org
 # ─────────────────────────────────────────────
-
-
-
-# ─────────────────────────────────────────────
-# RÉSULTATS — football-data.org
-# ─────────────────────────────────────────────
-
-FOOTBALLDATA_LEAGUE_MAP = {
-    39: "PL",   # Premier League
-    61: "FL1",  # Ligue 1
-}
-
-FOOTBALLDATA_BASE = "https://api.football-data.org/v4"
-
-
-def _footballdata_headers() -> dict:
-    return {"X-Auth-Token": os.getenv("FOOTBALLDATA_KEY", "")}
-
 
 def get_fixtures_results_batch(league_id: int, season: int, date: str) -> dict:
-    """
-    Récupère tous les résultats d'une journée via football-data.org.
-    Retourne dict {(home_name_lower, away_name_lower): result_dict}.
-    Couvre 1X2 ET Over/Under (total buts).
-    """
+    """Resultats d'une journee par ligue via football-data.org."""
     competition = FOOTBALLDATA_LEAGUE_MAP.get(league_id)
     if not competition:
         return {}
@@ -384,50 +387,78 @@ def get_fixtures_results_batch(league_id: int, season: int, date: str) -> dict:
         resp.raise_for_status()
         data = resp.json()
     except Exception as e:
-        print(f"[get_fixtures_results_batch] Erreur football-data.org: {e}")
+        print(f"[get_fixtures_results_batch] Erreur: {e}")
         return {}
 
     results = {}
     for match in data.get("matches", []):
-        status = match.get("status", "")
-        if status not in ("FINISHED",):
+        if match.get("status") != "FINISHED":
             continue
 
         home = match.get("homeTeam", {}).get("name", "")
         away = match.get("awayTeam", {}).get("name", "")
-        score = match.get("score", {})
-        full_time = score.get("fullTime", {})
-        home_goals = full_time.get("home")
-        away_goals = full_time.get("away")
+        ft   = match.get("score", {}).get("fullTime", {})
+        hg   = ft.get("home")
+        ag   = ft.get("away")
 
-        if home_goals is None or away_goals is None:
+        if hg is None or ag is None:
             continue
 
-        total = home_goals + away_goals
-        key_match = (home.lower(), away.lower())
-        results[key_match] = {
-            "home_goals": home_goals,
-            "away_goals": away_goals,
-            "total_goals": total,
-            "status": status,
-            "score": f"{home_goals}-{away_goals}",
-            "home_name": home,
-            "away_name": away,
+        result = {
+            "home_goals": hg, "away_goals": ag,
+            "total_goals": hg + ag, "status": "FINISHED",
+            "score": f"{hg}-{ag}", "home_name": home, "away_name": away,
         }
+        results[(home.lower(), away.lower())] = result
+        results[(normalize_team_name(home), normalize_team_name(away))] = result
 
-    print(f"[get_fixtures_results_batch] {len(results)} résultats trouvés pour {competition} le {date}")
+    print(f"[get_fixtures_results_batch] {len(results)//2} resultats pour {competition} le {date}")
     return results
 
 
-def get_today_results(league_id: int) -> dict:
-    """
-    Raccourci pour récupérer les résultats du jour.
-    """
-    from datetime import datetime, timezone
-    today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
-    return get_fixtures_results_batch(league_id, 0, today)
+def get_all_results_today(date: str) -> dict:
+    """Tous les resultats du jour toutes ligues via football-data.org."""
+    key = os.getenv("FOOTBALLDATA_KEY", "")
+    if not key:
+        return {}
+
+    url = f"{FOOTBALLDATA_BASE}/matches"
+    params = {"dateFrom": date, "dateTo": date}
+
+    try:
+        resp = requests.get(url, headers=_footballdata_headers(), params=params, timeout=15)
+        resp.raise_for_status()
+        data = resp.json()
+    except Exception as e:
+        print(f"[get_all_results_today] Erreur: {e}")
+        return {}
+
+    results = {}
+    for match in data.get("matches", []):
+        if match.get("status") != "FINISHED":
+            continue
+
+        home = match.get("homeTeam", {}).get("name", "")
+        away = match.get("awayTeam", {}).get("name", "")
+        ft   = match.get("score", {}).get("fullTime", {})
+        hg   = ft.get("home")
+        ag   = ft.get("away")
+
+        if hg is None or ag is None:
+            continue
+
+        result = {
+            "home_goals": hg, "away_goals": ag,
+            "total_goals": hg + ag, "status": "FINISHED",
+            "score": f"{hg}-{ag}", "home_name": home, "away_name": away,
+        }
+        results[(home.lower(), away.lower())] = result
+        results[(normalize_team_name(home), normalize_team_name(away))] = result
+
+    print(f"[get_all_results_today] {len(results)//2} resultats pour le {date}")
+    return results
 
 
 def get_fixture_result(fixture_id) -> Optional[dict]:
-    """Non utilisé — on passe par get_fixtures_results_batch."""
+    """Non utilise — on passe par get_fixtures_results_batch."""
     return None
