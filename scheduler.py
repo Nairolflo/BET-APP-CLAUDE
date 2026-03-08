@@ -38,6 +38,7 @@ from database import (
 from api_clients import (
     get_fixtures, get_odds, get_team_standings,
     get_fixtures_results_batch, get_all_results_today, normalize_team_name,
+    get_h2h, clear_h2h_cache, FOOTBALLDATA_LEAGUE_MAP,
 )
 from model import (
     calc_league_averages, calc_attack_defense_strength,
@@ -124,6 +125,7 @@ def run_value_bet_engine(silent=False):
         return
 
     worker_state["running"] = True
+    clear_h2h_cache()
     delete_today_pending_bets()
     now = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
     log.info("=" * 60)
@@ -218,7 +220,21 @@ def run_value_bet_engine(silent=False):
             if not odds:
                 continue
 
-            value_bets = find_value_bets(prediction, odds, VALUE_THRESHOLD, MIN_PROBABILITY)
+            # H2H bête noire — appel par match (résultat mis en cache)
+            h2h = None
+            if FOOTBALLDATA_LEAGUE_MAP.get(league_id):
+                try:
+                    h2h = get_h2h(league_id, home_name, away_name)
+                    if h2h:
+                        log.info(
+                            f"  🔥 H2H {home_name} vs {away_name}: "
+                            f"{h2h['home_wins']}W-{h2h['draws']}D-{h2h['away_wins']}L "
+                            f"(home={h2h['win_rate_home']:.0%})"
+                        )
+                except Exception as e:
+                    log.warning(f"  H2H indisponible pour {home_name} vs {away_name}: {e}")
+
+            value_bets = find_value_bets(prediction, odds, VALUE_THRESHOLD, MIN_PROBABILITY, h2h=h2h)
             match_info = {
                 "date":      fix["date"],
                 "home_team": home_name,
@@ -251,7 +267,18 @@ def run_value_bet_engine(silent=False):
     worker_state["bets_today"] = len(new_value_bets)
     worker_state["running"]    = False
 
-    send_daily_summary(new_value_bets)
+    now_str = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
+    if new_value_bets:
+        send_daily_summary(new_value_bets)
+    else:
+        send_message(
+            f"📭 <b>Analyse terminée — Aucun value bet</b>\n"
+            f"📅 {now_str}\n"
+            f"🔍 {len(LEAGUES)} ligues analysées\n\n"
+            f"Les critères sont stricts (cotes 1.40–2.30, proba ≥{MIN_PROBABILITY*100:.0f}%, "
+            f"value ≥{VALUE_THRESHOLD*100:.0f}%).\n"
+            f"⏰ Prochain run automatique : {SCHEDULER_HOUR:02d}h00 UTC"
+        )
 
     if errors:
         send_message("⚠️ <b>Erreurs durant l'analyse :</b>\n" + "\n".join(f"• {e}" for e in errors))
@@ -638,6 +665,10 @@ def run_scheduler():
         run_value_bet_engine, "cron",
         hour=SCHEDULER_HOUR, minute=0, id="daily_value_bets",
         kwargs={"silent": False}
+    )
+    scheduler.add_job(
+        _send_bets_summary, "cron",
+        hour=SCHEDULER_HOUR, minute=5, id="daily_bets_summary",
     )
     scheduler.add_job(
         check_results, "cron",

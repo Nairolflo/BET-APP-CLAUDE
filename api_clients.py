@@ -668,3 +668,474 @@ def get_all_results_today(date: str) -> dict:
 def get_fixture_result(fixture_id) -> Optional[dict]:
     """Non utilise — on passe par get_fixtures_results_batch."""
     return None
+
+
+# ─────────────────────────────────────────────
+# H2H — football-data.org
+# ─────────────────────────────────────────────
+
+def get_upcoming_match_ids(league_id: int, days_ahead: int = 10) -> list:
+    """
+    Recupere les IDs football-data.org des prochains matchs d'une ligue.
+    Retourne une liste de dicts : {match_id, home_team, away_team, date}
+    """
+    competition = FOOTBALLDATA_LEAGUE_MAP.get(league_id)
+    key = os.getenv("FOOTBALLDATA_KEY", "")
+    if not competition or not key:
+        return []
+
+    from datetime import datetime, timezone, timedelta
+    now      = datetime.now(timezone.utc)
+    date_to  = (now + timedelta(days=days_ahead)).strftime("%Y-%m-%d")
+    date_from = now.strftime("%Y-%m-%d")
+
+    url    = f"{FOOTBALLDATA_BASE}/competitions/{competition}/matches"
+    params = {"dateFrom": date_from, "dateTo": date_to, "status": "SCHEDULED"}
+
+    try:
+        resp = requests.get(url, headers=_footballdata_headers(), params=params, timeout=15)
+        resp.raise_for_status()
+        data = resp.json()
+    except Exception as e:
+        print(f"[get_upcoming_match_ids] Erreur: {e}")
+        return []
+
+    matches = []
+    for m in data.get("matches", []):
+        matches.append({
+            "match_id":  m.get("id"),
+            "home_team": normalize_team_name(m.get("homeTeam", {}).get("name", "")),
+            "away_team": normalize_team_name(m.get("awayTeam", {}).get("name", "")),
+            "date":      m.get("utcDate", "")[:10],
+        })
+
+    print(f"[get_upcoming_match_ids] {len(matches)} matchs a venir pour {competition}")
+    return matches
+
+
+def get_h2h(match_id: int, limit: int = 10) -> dict:
+    """
+    Recupère l'historique H2H d'un match via football-data.org.
+    Retourne un dict avec les stats bête noire.
+
+    Format retourné :
+    {
+        "total":          int,   # nb matchs H2H
+        "home_wins":      int,   # victoires équipe domicile
+        "away_wins":      int,   # victoires équipe exterieur
+        "draws":          int,
+        "home_win_rate":  float, # 0.0 - 1.0
+        "away_win_rate":  float,
+        "bete_noire":     str|None,  # "home" | "away" | None
+        "bete_noire_rate": float,    # taux de domination
+    }
+    """
+    key = os.getenv("FOOTBALLDATA_KEY", "")
+    if not key or not match_id:
+        return {}
+
+    url    = f"{FOOTBALLDATA_BASE}/matches/{match_id}/head2head"
+    params = {"limit": limit}
+
+    try:
+        resp = requests.get(url, headers=_footballdata_headers(), params=params, timeout=15)
+        resp.raise_for_status()
+        data = resp.json()
+    except Exception as e:
+        print(f"[get_h2h] Erreur match {match_id}: {e}")
+        return {}
+
+    aggregates = data.get("aggregates", {})
+    home_team  = aggregates.get("homeTeam", {})
+    away_team  = aggregates.get("awayTeam", {})
+    total      = aggregates.get("numberOfMatches", 0)
+
+    if total < 3:
+        return {}
+
+    home_wins = home_team.get("wins", 0)
+    away_wins = away_team.get("wins", 0)
+    draws     = total - home_wins - away_wins
+
+    home_win_rate = home_wins / total
+    away_win_rate = away_wins / total
+
+    # Détection bête noire : domination > 60% sur min 5 matchs
+    bete_noire      = None
+    bete_noire_rate = 0.0
+
+    if total >= 5:
+        if home_win_rate >= 0.60:
+            bete_noire      = "home"
+            bete_noire_rate = home_win_rate
+        elif away_win_rate >= 0.60:
+            bete_noire      = "away"
+            bete_noire_rate = away_win_rate
+
+    print(
+        f"[get_h2h] match {match_id}: {total} matchs, "
+        f"dom {home_wins}W/{draws}D/{away_wins}W ext | "
+        f"bete_noire={bete_noire} ({bete_noire_rate:.0%})"
+    )
+
+    return {
+        "total":           total,
+        "home_wins":       home_wins,
+        "away_wins":       away_wins,
+        "draws":           draws,
+        "home_win_rate":   round(home_win_rate, 3),
+        "away_win_rate":   round(away_win_rate, 3),
+        "bete_noire":      bete_noire,
+        "bete_noire_rate": round(bete_noire_rate, 3),
+    }
+
+
+def get_h2h_for_fixtures(league_id: int, days_ahead: int = 10) -> dict:
+    """
+    Recupere le H2H pour tous les prochains matchs d'une ligue.
+    Retourne un dict : {(home_norm, away_norm): h2h_dict}
+    Limite les requetes API (max 20 matchs).
+    """
+    upcoming = get_upcoming_match_ids(league_id, days_ahead)
+    h2h_map  = {}
+
+    for match in upcoming[:20]:  # max 20 requetes par ligue
+        match_id = match.get("match_id")
+        if not match_id:
+            continue
+        h2h = get_h2h(match_id)
+        if h2h:
+            key = (match["home_team"], match["away_team"])
+            h2h_map[key] = h2h
+
+    print(f"[get_h2h_for_fixtures] {len(h2h_map)} H2H récupérés pour league {league_id}")
+    return h2h_map
+
+
+# ─────────────────────────────────────────────
+# H2H — football-data.org
+# ─────────────────────────────────────────────
+
+def get_upcoming_match_ids(league_id: int, days_ahead: int = 10) -> list:
+    """
+    Recupere les matchs a venir via football-data.org pour avoir leurs IDs H2H.
+    Retourne une liste de dicts : {match_id, home, away, date}
+    """
+    competition = FOOTBALLDATA_LEAGUE_MAP.get(league_id)
+    key = os.getenv("FOOTBALLDATA_KEY", "")
+    if not competition or not key:
+        return []
+
+    from datetime import timedelta
+    now      = datetime.now(timezone.utc)
+    date_from = now.strftime("%Y-%m-%d")
+    date_to   = (now + timedelta(days=days_ahead)).strftime("%Y-%m-%d")
+
+    url    = f"{FOOTBALLDATA_BASE}/competitions/{competition}/matches"
+    params = {"dateFrom": date_from, "dateTo": date_to, "status": "SCHEDULED,TIMED"}
+
+    try:
+        resp = requests.get(url, headers=_footballdata_headers(), params=params, timeout=15)
+        resp.raise_for_status()
+        data = resp.json()
+    except Exception as e:
+        print(f"[get_upcoming_match_ids] Erreur league {league_id}: {e}")
+        return []
+
+    matches = []
+    for m in data.get("matches", []):
+        match_id  = m.get("id")
+        home_name = m.get("homeTeam", {}).get("name", "")
+        away_name = m.get("awayTeam", {}).get("name", "")
+        date      = m.get("utcDate", "")[:10]
+        if match_id and home_name and away_name:
+            matches.append({
+                "match_id":  match_id,
+                "home":      home_name,
+                "away":      away_name,
+                "home_norm": normalize_team_name(home_name),
+                "away_norm": normalize_team_name(away_name),
+                "date":      date,
+            })
+
+    print(f"[get_upcoming_match_ids] {len(matches)} matchs a venir pour {competition}")
+    return matches
+
+
+def get_h2h(match_id: int, limit: int = 10) -> dict:
+    """
+    Recupere l'historique H2H d'un match via football-data.org.
+    Retourne un dict avec les stats utiles pour detecter une bete noire.
+    """
+    key = os.getenv("FOOTBALLDATA_KEY", "")
+    if not key:
+        return {}
+
+    url    = f"{FOOTBALLDATA_BASE}/matches/{match_id}/head2head"
+    params = {"limit": limit}
+
+    try:
+        resp = requests.get(url, headers=_footballdata_headers(), params=params, timeout=15)
+        resp.raise_for_status()
+        data = resp.json()
+    except Exception as e:
+        print(f"[get_h2h] Erreur match {match_id}: {e}")
+        return {}
+
+    matches       = data.get("matches", [])
+    aggregates    = data.get("aggregates", {})
+    home_team_agg = aggregates.get("homeTeam", {})
+    away_team_agg = aggregates.get("awayTeam", {})
+
+    if not matches:
+        return {}
+
+    # Calcul manuel depuis les matchs si aggregates incomplet
+    home_name = matches[0].get("homeTeam", {}).get("name", "") if matches else ""
+    away_name = matches[0].get("awayTeam", {}).get("name", "") if matches else ""
+
+    # On recupere les deux equipes impliquees dans ce match specifique
+    # (les H2H peuvent alterner domicile/exterieur)
+    team_a = home_name  # equipe consideree "home" dans le match a venir
+    team_b = away_name
+
+    wins_a  = 0
+    wins_b  = 0
+    draws   = 0
+    total   = 0
+
+    for m in matches:
+        if m.get("status") != "FINISHED":
+            continue
+        ft = m.get("score", {}).get("fullTime", {})
+        hg = ft.get("home")
+        ag = ft.get("away")
+        if hg is None or ag is None:
+            continue
+
+        h_name = m.get("homeTeam", {}).get("name", "")
+        a_name = m.get("awayTeam", {}).get("name", "")
+        total += 1
+
+        if hg > ag:
+            # Equipe domicile gagne
+            if h_name == team_a or normalize_team_name(h_name) == normalize_team_name(team_a):
+                wins_a += 1
+            else:
+                wins_b += 1
+        elif ag > hg:
+            # Equipe exterieur gagne
+            if a_name == team_a or normalize_team_name(a_name) == normalize_team_name(team_a):
+                wins_a += 1
+            else:
+                wins_b += 1
+        else:
+            draws += 1
+
+    if total == 0:
+        return {}
+
+    return {
+        "total":       total,
+        "wins_home":   wins_a,   # victoires equipe jouant a domicile dans le match a venir
+        "wins_away":   wins_b,   # victoires equipe jouant a l'exterieur dans le match a venir
+        "draws":       draws,
+        "win_rate_home": round(wins_a / total, 3),
+        "win_rate_away": round(wins_b / total, 3),
+        "match_id":    match_id,
+    }
+
+
+def build_h2h_lookup(league_id: int, days_ahead: int = 10) -> dict:
+    """
+    Construit un lookup {(home_norm, away_norm): h2h_stats} pour tous les matchs
+    a venir d'une ligue. Appele une fois par ligue au debut de run_value_bet_engine.
+    """
+    upcoming = get_upcoming_match_ids(league_id, days_ahead)
+    if not upcoming:
+        return {}
+
+    lookup = {}
+    for m in upcoming:
+        h2h = get_h2h(m["match_id"])
+        if h2h:
+            key = (m["home_norm"], m["away_norm"])
+            lookup[key] = h2h
+            print(
+                f"[H2H] {m['home']} vs {m['away']} : "
+                f"{h2h['wins_home']}W-{h2h['draws']}D-{h2h['wins_away']}L "
+                f"sur {h2h['total']} matchs"
+            )
+
+    return lookup
+
+
+# ─────────────────────────────────────────────
+# H2H — football-data.org
+# ─────────────────────────────────────────────
+
+# Cache en mémoire pour éviter de refetch pendant un run
+_h2h_cache = {}
+
+def get_h2h(league_id: int, home_team: str, away_team: str, limit: int = 10) -> dict:
+    """
+    Récupère l'historique H2H entre deux équipes via football-data.org.
+
+    Stratégie :
+      1. Cherche les matchs à venir de la ligue pour trouver le match_id
+      2. Appelle /v4/matches/{id}/head2head?limit=10
+      3. Calcule win_rate_home et win_rate_away du point de vue du match actuel
+
+    Retourne dict avec :
+      {
+        "total":         int,
+        "home_wins":     int,
+        "away_wins":     int,
+        "draws":         int,
+        "win_rate_home": float,
+        "win_rate_away": float,
+      }
+    Retourne None si pas de données ou erreur.
+    """
+    cache_key = f"{league_id}_{normalize_team_name(home_team)}_{normalize_team_name(away_team)}"
+    if cache_key in _h2h_cache:
+        return _h2h_cache[cache_key]
+
+    competition = FOOTBALLDATA_LEAGUE_MAP.get(league_id)
+    key = os.getenv("FOOTBALLDATA_KEY", "")
+
+    if not competition or not key:
+        return None
+
+    # Etape 1 : trouver le match_id dans les matchs à venir
+    from datetime import datetime, timezone, timedelta
+    today    = datetime.now(timezone.utc).date().isoformat()
+    future   = (datetime.now(timezone.utc).date() + timedelta(days=15)).isoformat()
+
+    try:
+        url    = f"{FOOTBALLDATA_BASE}/competitions/{competition}/matches"
+        params = {"dateFrom": today, "dateTo": future}
+        resp   = requests.get(url, headers=_footballdata_headers(), params=params, timeout=15)
+        resp.raise_for_status()
+        matches = resp.json().get("matches", [])
+    except Exception as e:
+        print(f"[get_h2h] Erreur fetch matchs: {e}")
+        return None
+
+    # Cherche le match correspondant
+    match_id = None
+    h_norm   = normalize_team_name(home_team)
+    a_norm   = normalize_team_name(away_team)
+
+    for m in matches:
+        fd_home = normalize_team_name(m.get("homeTeam", {}).get("name", ""))
+        fd_away = normalize_team_name(m.get("awayTeam", {}).get("name", ""))
+        h_match = fd_home == h_norm or h_norm in fd_home or fd_home in h_norm
+        a_match = fd_away == a_norm or a_norm in fd_away or fd_away in a_norm
+        if h_match and a_match:
+            match_id = m.get("id")
+            break
+
+    if not match_id:
+        print(f"[get_h2h] Match non trouvé: {home_team} vs {away_team}")
+        _h2h_cache[cache_key] = None
+        return None
+
+    # Etape 2 : fetch le H2H
+    try:
+        url  = f"{FOOTBALLDATA_BASE}/matches/{match_id}/head2head"
+        params = {"limit": limit}
+        resp = requests.get(url, headers=_footballdata_headers(), params=params, timeout=15)
+        resp.raise_for_status()
+        data = resp.json()
+    except Exception as e:
+        print(f"[get_h2h] Erreur fetch H2H match {match_id}: {e}")
+        _h2h_cache[cache_key] = None
+        return None
+
+    agg  = data.get("aggregates", {})
+    total = agg.get("numberOfMatches", 0)
+    if total < 5:
+        print(f"[get_h2h] Pas assez de matchs H2H ({total}) pour {home_team} vs {away_team}")
+        _h2h_cache[cache_key] = None
+        return None
+
+    # Victoires du point de vue du match actuel (home = equipe domicile aujourd'hui)
+    home_id = None
+    away_id = None
+    h2h_matches = data.get("matches", [])
+    if h2h_matches:
+        # Cherche les IDs des équipes dans les matchs H2H
+        for m in h2h_matches:
+            home_name_fd = m.get("homeTeam", {}).get("name", "")
+            away_name_fd = m.get("awayTeam", {}).get("name", "")
+            if normalize_team_name(home_name_fd) == h_norm or h_norm in normalize_team_name(home_name_fd):
+                home_id = m.get("homeTeam", {}).get("id")
+            if normalize_team_name(away_name_fd) == a_norm or a_norm in normalize_team_name(away_name_fd):
+                away_id = m.get("awayTeam", {}).get("id")
+            if home_id and away_id:
+                break
+
+    home_wins = 0
+    away_wins = 0
+    draws     = 0
+
+    for m in h2h_matches:
+        if m.get("status") != "FINISHED":
+            continue
+        ft = m.get("score", {}).get("fullTime", {})
+        hg = ft.get("home")
+        ag = ft.get("away")
+        if hg is None or ag is None:
+            continue
+
+        m_home_id = m.get("homeTeam", {}).get("id")
+        m_away_id = m.get("awayTeam", {}).get("id")
+
+        if hg == ag:
+            draws += 1
+        elif hg > ag:
+            # Equipe domicile de ce match H2H a gagné
+            if home_id and m_home_id == home_id:
+                home_wins += 1  # notre equipe domicile a gagné
+            elif away_id and m_home_id == away_id:
+                away_wins += 1  # notre equipe extérieure a gagné en jouant à domicile
+            else:
+                home_wins += 1  # par défaut
+        else:
+            # Equipe extérieure de ce match H2H a gagné
+            if away_id and m_away_id == away_id:
+                away_wins += 1
+            elif home_id and m_away_id == home_id:
+                home_wins += 1
+            else:
+                away_wins += 1
+
+    counted = home_wins + away_wins + draws
+    if counted == 0:
+        _h2h_cache[cache_key] = None
+        return None
+
+    result = {
+        "total":         counted,
+        "home_wins":     home_wins,
+        "away_wins":     away_wins,
+        "draws":         draws,
+        "win_rate_home": round(home_wins / counted, 3),
+        "win_rate_away": round(away_wins / counted, 3),
+    }
+
+    print(
+        f"[get_h2h] {home_team} vs {away_team} | "
+        f"{home_wins}W-{draws}D-{away_wins}L sur {counted} matchs | "
+        f"home={result['win_rate_home']:.0%} away={result['win_rate_away']:.0%}"
+    )
+
+    _h2h_cache[cache_key] = result
+    return result
+
+
+def clear_h2h_cache():
+    """Vide le cache H2H (appeler au debut de chaque run)."""
+    global _h2h_cache
+    _h2h_cache = {}

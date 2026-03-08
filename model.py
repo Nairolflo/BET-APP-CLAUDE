@@ -2,10 +2,13 @@
 model.py - Poisson + Market Combined Prediction Model
 
 Combine deux sources de probabilité :
-  1. Modèle Poisson (30%) — basé sur stats attaque/défense saison
-  2. Probabilité implicite des cotes (70%) — intègre forme, blessés, H2H, etc.
+  1. Modèle Poisson (50%) — basé sur stats attaque/défense saison
+  2. Probabilité implicite des cotes (50%) — intègre forme, blessés, H2H, etc.
 
-La value bet est détectée quand la probabilité combinée > cote bookmaker.
+Bonus bête noire :
+  - +4% si équipe domine H2H à 70%+ sur 5+ matchs
+  - +6% si 80%+ sur 8+ matchs
+  - +8% si 90%+ sur 10+ matchs
 """
 
 import math
@@ -98,30 +101,23 @@ def _fuzzy_get(strengths: dict, name: str):
 
 
 def remove_bookmaker_margin(odds_dict: dict) -> dict:
-    """
-    Retire la marge bookmaker des cotes pour obtenir les probabilités vraies.
-    Utilise la méthode de normalisation simple (shin method approximation).
-    """
-    h2h_keys = ["home_win", "draw", "away_win"]
-
-    # Pour chaque groupe de marchés liés (1X2, Over/Under par seuil)
-    # on normalise séparément
+    """Retire la marge bookmaker — normalisation simple."""
     result = {}
 
     # 1X2
+    h2h_keys = ["home_win", "draw", "away_win"]
     h2h_odds = {k: odds_dict[k] for k in h2h_keys if k in odds_dict and odds_dict[k]}
     if len(h2h_odds) >= 2:
         raw_probs = {k: 1 / v for k, v in h2h_odds.items()}
         total = sum(raw_probs.values())
         for k, p in raw_probs.items():
-            result[k] = p / total  # probabilité normalisée sans marge
+            result[k] = p / total
 
     # Over/Under par seuil
     thresholds_seen = set()
     for key in odds_dict:
         if key.startswith("over_"):
-            suffix = key[5:]  # "2_5"
-            thresholds_seen.add(suffix)
+            thresholds_seen.add(key[5:])
 
     for suffix in thresholds_seen:
         over_key  = f"over_{suffix}"
@@ -138,13 +134,70 @@ def remove_bookmaker_margin(odds_dict: dict) -> dict:
     return result
 
 
+# ─────────────────────────────────────────────
+# BETE NOIRE
+# ─────────────────────────────────────────────
+
+def calc_bete_noire_bonus(market_key: str, h2h: dict) -> float:
+    """
+    Calcule le bonus bête noire basé sur l'historique H2H.
+
+    Structure h2h attendue (retournée par get_h2h()) :
+      {
+        "total":         10,   # nb matchs H2H analysés
+        "home_wins":      7,   # victoires equipe domicile du match actuel
+        "away_wins":      2,   # victoires equipe extérieure
+        "draws":          1,
+        "win_rate_home":  0.70,
+        "win_rate_away":  0.20,
+      }
+
+    Seuils bonus :
+      - 70%+ sur 5+ matchs  → +4%
+      - 80%+ sur 8+ matchs  → +6%
+      - 90%+ sur 10+ matchs → +8%
+    """
+    if not h2h:
+        return 0.0
+
+    total = h2h.get("total", 0)
+    if total < 5:
+        return 0.0
+
+    if market_key == "home_win":
+        win_rate = h2h.get("win_rate_home", 0)
+    elif market_key == "away_win":
+        win_rate = h2h.get("win_rate_away", 0)
+    else:
+        return 0.0  # pas de bonus bete noire sur Over/Under
+
+    if win_rate >= 0.90 and total >= 10:
+        bonus = 0.08
+    elif win_rate >= 0.80 and total >= 8:
+        bonus = 0.06
+    elif win_rate >= 0.70 and total >= 5:
+        bonus = 0.04
+    else:
+        bonus = 0.0
+
+    if bonus > 0:
+        side = "HOME" if market_key == "home_win" else "AWAY"
+        print(
+            f"[BETE NOIRE] {side} | win_rate={win_rate:.0%} sur {total} matchs "
+            f"→ bonus +{bonus*100:.0f}%"
+        )
+
+    return bonus
+
+
+# ─────────────────────────────────────────────
+# PREDICTION
+# ─────────────────────────────────────────────
+
 def predict_match(home_name: str, away_name: str, strengths: dict,
                   league_avg_home: float, league_avg_away: float,
                   ou_thresholds: list = None):
-    """
-    Prédit un match via Poisson.
-    Retourne les probabilités du modèle (avant combinaison avec le marché).
-    """
+    """Prédit un match via Poisson."""
     h = _fuzzy_get(strengths, home_name)
     a = _fuzzy_get(strengths, away_name)
 
@@ -181,72 +234,60 @@ def predict_match(home_name: str, away_name: str, strengths: dict,
     return result
 
 
-def combine_probabilities(poisson_prob: float, market_prob: float,
+def combine_probabilities(poisson_p: float, market_p: float,
                            poisson_weight: float = 0.50) -> float:
-    """
-    Combine la probabilité Poisson et la probabilité implicite du marché.
-    Poids par défaut : 30% Poisson, 70% marché.
-    Le marché intègre forme récente, blessés, H2H — plus fiable que Poisson seul.
-    """
-    market_weight = 1.0 - poisson_weight
-    return poisson_prob * poisson_weight + market_prob * market_weight
+    """Combine probabilité Poisson (50%) et marché (50%)."""
+    return poisson_p * poisson_weight + market_p * (1.0 - poisson_weight)
 
+
+# ─────────────────────────────────────────────
+# FIND VALUE BETS
+# ─────────────────────────────────────────────
 
 def find_value_bets(predictions: dict, odds: dict,
-                    value_threshold: float = 0.05, min_prob: float = 0.55,
-                    poisson_weight: float = 0.50):
+                    value_threshold: float = 0.02, min_prob: float = 0.55,
+                    poisson_weight: float = 0.50, h2h: dict = None):
     """
-    Détecte les value bets de haute qualité :
-      - Probabilité Poisson (50%) + marché (50%)
-      - Cibles : favoris clairs uniquement (cote 1.40-2.30)
-      - Exclut les nuls (trop aléatoires)
-      - Privilégie Over 2.5 sur Under (plus prédictible)
-      - Objectif : 65-70% de réussite, peu de bets mais fiables
+    Détecte les value bets de haute qualité.
+
+    Critères :
+      - Cote 1.40–2.30 (favoris clairs)
+      - Pas de nul
+      - Pas d'Under
+      - Over 2.5 et Over 3.5 uniquement
+      - Ecart Poisson/marché < 15%
+      - Bonus bête noire si h2h favorable
     """
     fixed_markets = {
         "home_win": "Home Win",
-        "draw":     "Draw",
         "away_win": "Away Win",
     }
 
     best_per_market = {}
-
-    # Fourchette de cotes cibles : favoris clairs uniquement
     MIN_ODDS = 1.40
     MAX_ODDS = 2.30
 
     for bk_name, bk_odds in odds.items():
-        # Retire la marge bookmaker pour obtenir probs vraies du marché
         market_probs = remove_bookmaker_margin(bk_odds)
 
         def check_market(market_key, market_label, poisson_p, bk_odd, market_p):
             if poisson_p is None or bk_odd is None or market_p is None:
                 return
 
-            # Filtre cotes : favoris clairs uniquement
             if bk_odd < MIN_ODDS or bk_odd > MAX_ODDS:
                 return
 
-            # Exclut les nuls (trop aléatoires pour 65-70% de réussite)
-            if market_label == "Draw":
-                return
-
-            # Exclut Under (moins prédictible que Over)
-            if market_label.startswith("Under"):
-                return
-
-            # Exclut Over 1.5 (trop facile = value quasi nulle)
-            if market_label == "Over 1.5":
-                return
-
-            # Probabilité combinée Poisson 50% + marché 50%
             combined_p = combine_probabilities(poisson_p, market_p, poisson_weight)
 
-            # Seuil de probabilité strict pour haute fiabilité
+            # Bonus bête noire H2H
+            bn_bonus = calc_bete_noire_bonus(market_key, h2h)
+            if bn_bonus > 0:
+                combined_p = min(combined_p + bn_bonus, 0.97)
+
             if combined_p < min_prob:
                 return
 
-            # Les deux modèles doivent être d accord (écart max 15%)
+            # Les deux modèles doivent être d'accord
             if abs(poisson_p - market_p) > 0.15:
                 return
 
@@ -257,20 +298,22 @@ def find_value_bets(predictions: dict, odds: dict,
             existing = best_per_market.get(market_key)
             if existing is None or value > existing["value"]:
                 best_per_market[market_key] = {
-                    "market":        market_label,
-                    "bookmaker":     bk_name,
-                    "bk_odds":       round(bk_odd, 3),
-                    "model_odds":    round(1 / combined_p, 3),
-                    "probability":   round(combined_p, 4),
-                    "poisson_prob":  round(poisson_p, 4),
-                    "market_prob":   round(market_p, 4),
-                    "value":         round(value, 4),
+                    "market":          market_label,
+                    "bookmaker":       bk_name,
+                    "bk_odds":         round(bk_odd, 3),
+                    "model_odds":      round(1 / combined_p, 3),
+                    "probability":     round(combined_p, 4),
+                    "poisson_prob":    round(poisson_p, 4),
+                    "market_prob":     round(market_p, 4),
+                    "value":           round(value, 4),
+                    "bete_noire":      bn_bonus > 0,
+                    "bete_noire_rate": round(
+                        h2h.get("win_rate_home" if market_key == "home_win" else "win_rate_away", 0), 3
+                    ) if h2h and bn_bonus > 0 else 0,
                 }
 
-        # 1X2 (sans Draw)
+        # 1X2 sans Draw
         for market_key, market_label in fixed_markets.items():
-            if market_key == "draw":
-                continue
             check_market(
                 market_key, market_label,
                 predictions.get(market_key),
@@ -278,7 +321,7 @@ def find_value_bets(predictions: dict, odds: dict,
                 market_probs.get(market_key),
             )
 
-        # Over uniquement (2.5 et 3.5)
+        # Over 2.5 et Over 3.5 uniquement
         for bk_key, bk_odd in bk_odds.items():
             if not bk_key.startswith("over_"):
                 continue
@@ -289,7 +332,6 @@ def find_value_bets(predictions: dict, odds: dict,
             except ValueError:
                 continue
 
-            # Uniquement Over 2.5 et Over 3.5
             if threshold not in (2.5, 3.5):
                 continue
 
