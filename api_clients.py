@@ -7,9 +7,26 @@ Sources :
 """
 
 import os
+import time
 import requests
 from datetime import datetime, timezone, timedelta
 from typing import Optional
+
+# Rate limiter football-data.org : 10 req/min plan gratuit
+_fd_last_call   = 0.0
+FD_MIN_INTERVAL = 6.5  # secondes minimum entre chaque appel FD
+
+def _fd_rate_limit():
+    """Attend si nécessaire pour respecter la limite 10 req/min."""
+    global _fd_last_call
+    elapsed = time.time() - _fd_last_call
+    if elapsed < FD_MIN_INTERVAL:
+        wait = FD_MIN_INTERVAL - elapsed
+        time.sleep(wait)
+    _fd_last_call = time.time()
+
+# Ligues avec trop de matchs — H2H désactivé pour éviter explosion d'appels API
+H2H_DISABLED_LEAGUES = {40, 71, 262, 179, 144, 203, 3}
 
 # ─────────────────────────────────────────────
 # CONFIG
@@ -406,6 +423,7 @@ def get_team_standings(league_id: int, season: int) -> list:
     if competition and key:
         try:
             url  = f"{FOOTBALLDATA_BASE}/competitions/{competition}/standings"
+            _fd_rate_limit()
             resp = requests.get(url, headers=_fd_headers(), timeout=15)
             resp.raise_for_status()
             data = resp.json()
@@ -530,6 +548,7 @@ def get_recent_form(league_id: int, season: int) -> dict:
     try:
         url    = f"{FOOTBALLDATA_BASE}/competitions/{competition}/matches"
         params = {"dateFrom": date_from, "dateTo": date_to, "status": "FINISHED"}
+        _fd_rate_limit()
         resp   = requests.get(url, headers=_fd_headers(), params=params, timeout=15)
         resp.raise_for_status()
         matches = resp.json().get("matches", [])
@@ -626,110 +645,129 @@ def clear_form_cache():
 
 
 # ─────────────────────────────────────────────
-# H2H — football-data.org
+# H2H — football-data.org (batch par ligue)
 # ─────────────────────────────────────────────
 
-_h2h_cache = {}
+# Cache global : tous les matchs de la saison par ligue
+# Structure : { league_id: [ {home_id, away_id, home_name, away_name, date, hg, ag}, ... ] }
+_season_matches_cache = {}
 
-def get_h2h(league_id: int, home_team: str, away_team: str, limit: int = 10) -> Optional[dict]:
+
+def prefetch_season_matches(league_id: int, seasons: list) -> list:
     """
-    Historique H2H entre deux équipes via football-data.org.
-    Retourne win_rate_home, win_rate_away, total matchs.
+    Pré-fetch tous les matchs terminés d'une ligue sur plusieurs saisons.
+    1 appel API par saison — résultat mis en cache global.
+    Utilisé pour calculer H2H localement sans appel supplémentaire.
     """
-    h_norm    = normalize_team_name(home_team)
-    a_norm    = normalize_team_name(away_team)
-    cache_key = f"{league_id}_{h_norm}_{a_norm}"
-
-    if cache_key in _h2h_cache:
-        return _h2h_cache[cache_key]
-
     competition = FOOTBALLDATA_LEAGUE_MAP.get(league_id)
+    cache_key = f"season_{league_id}_{'_'.join(str(s) for s in seasons)}"
+
+    # Vérifie le cache en premier (avant de checker les env vars)
+    if cache_key in _season_matches_cache:
+        return _season_matches_cache[cache_key]
+
     key = os.getenv("FOOTBALLDATA_KEY", "")
     if not competition or not key:
+        return []
+
+    all_matches = []
+    for season in seasons:
+        try:
+            url    = f"{FOOTBALLDATA_BASE}/competitions/{competition}/matches"
+            params = {"season": season, "status": "FINISHED"}
+            _fd_rate_limit()
+            resp = requests.get(url, headers=_fd_headers(), params=params, timeout=15)
+            resp.raise_for_status()
+            matches = resp.json().get("matches", [])
+
+            for m in matches:
+                ft = m.get("score", {}).get("fullTime", {})
+                hg = ft.get("home")
+                ag = ft.get("away")
+                if hg is None or ag is None:
+                    continue
+                home_raw = m.get("homeTeam", {}).get("name", "")
+                away_raw = m.get("awayTeam", {}).get("name", "")
+                all_matches.append({
+                    "date":       m.get("utcDate", "")[:10],
+                    "home_id":    m.get("homeTeam", {}).get("id"),
+                    "away_id":    m.get("awayTeam", {}).get("id"),
+                    "home_name":  home_raw,
+                    "away_name":  away_raw,
+                    "home_norm":  normalize_team_name(home_raw),
+                    "away_norm":  normalize_team_name(away_raw),
+                    "home_goals": hg,
+                    "away_goals": ag,
+                })
+            print(f"[prefetch] {len(matches)} matchs — {competition} saison {season}")
+        except Exception as e:
+            print(f"[prefetch] Erreur {competition} saison {season}: {e}")
+
+    _season_matches_cache[cache_key] = all_matches
+    return all_matches
+
+
+def get_h2h(league_id: int, home_team: str, away_team: str,
+            match_date: str = None, seasons: list = None) -> Optional[dict]:
+    """
+    Calcule le H2H entre deux équipes depuis les données pré-fetchées.
+    Filtre uniquement les matchs AVANT match_date pour éviter les matchs retour.
+
+    Retourne dict avec win_rate_home, win_rate_away, total.
+    Retourne None si moins de 5 matchs historiques.
+    """
+    h_norm = normalize_team_name(home_team)
+    a_norm = normalize_team_name(away_team)
+
+    # Seasons par défaut : 3 saisons pour max d'historique
+    if seasons is None:
+        current_season = int(os.getenv("SEASON", 2025))
+        seasons = [current_season, current_season - 1, current_season - 2]
+
+    # Pré-fetch si pas encore en cache
+    all_matches = prefetch_season_matches(league_id, seasons)
+    if not all_matches:
         return None
 
-    # Trouve le match_id dans les matchs à venir
-    today  = datetime.now(timezone.utc).date().isoformat()
-    future = (datetime.now(timezone.utc).date() + timedelta(days=15)).isoformat()
+    # Filtre les matchs entre ces deux équipes avant la date du match
+    h2h_matches = []
+    for m in all_matches:
+        fd_home = m.get("home_norm") or normalize_team_name(m["home_name"])
+        fd_away = m.get("away_norm") or normalize_team_name(m["away_name"])
 
-    try:
-        url    = f"{FOOTBALLDATA_BASE}/competitions/{competition}/matches"
-        params = {"dateFrom": today, "dateTo": future}
-        resp   = requests.get(url, headers=_fd_headers(), params=params, timeout=15)
-        resp.raise_for_status()
-        matches = resp.json().get("matches", [])
-    except Exception as e:
-        print(f"[get_h2h] Erreur fetch matchs: {e}")
+        is_normal  = (fd_home == h_norm or h_norm in fd_home or fd_home in h_norm) and                      (fd_away == a_norm or a_norm in fd_away or fd_away in a_norm)
+        is_reverse = (fd_home == a_norm or a_norm in fd_home or fd_home in a_norm) and                      (fd_away == h_norm or h_norm in fd_away or fd_away in h_norm)
+
+        if not (is_normal or is_reverse):
+            continue
+
+        # Filtre par date — uniquement avant le match prédit
+        if match_date and m["date"] >= match_date:
+            continue
+
+        h2h_matches.append({**m, "reversed": is_reverse})
+
+    if len(h2h_matches) < 5:
         return None
 
-    match_id = None
-    for m in matches:
-        fd_home = normalize_team_name(m.get("homeTeam", {}).get("name", ""))
-        fd_away = normalize_team_name(m.get("awayTeam", {}).get("name", ""))
-        if (fd_home == h_norm or h_norm in fd_home or fd_home in h_norm) and \
-           (fd_away == a_norm or a_norm in fd_away or fd_away in a_norm):
-            match_id = m.get("id")
-            break
-
-    if not match_id:
-        _h2h_cache[cache_key] = None
-        return None
-
-    try:
-        url  = f"{FOOTBALLDATA_BASE}/matches/{match_id}/head2head"
-        resp = requests.get(url, headers=_fd_headers(), params={"limit": limit}, timeout=15)
-        resp.raise_for_status()
-        data = resp.json()
-    except Exception as e:
-        print(f"[get_h2h] Erreur H2H match {match_id}: {e}")
-        _h2h_cache[cache_key] = None
-        return None
-
-    h2h_matches = data.get("matches", [])
+    # Calcule les stats du point de vue de l'équipe domicile du match actuel
     home_wins = away_wins = draws = 0
-    home_id   = None
-    away_id   = None
-
     for m in h2h_matches:
-        fd_home = normalize_team_name(m.get("homeTeam", {}).get("name", ""))
-        if fd_home == h_norm or h_norm in fd_home:
-            home_id = m.get("homeTeam", {}).get("id")
-        fd_away = normalize_team_name(m.get("awayTeam", {}).get("name", ""))
-        if fd_away == a_norm or a_norm in fd_away:
-            away_id = m.get("awayTeam", {}).get("id")
-        if home_id and away_id:
-            break
+        hg = m["home_goals"]
+        ag = m["away_goals"]
+        if m["reversed"]:
+            # Dans ce match H2H, notre équipe "home" jouait en extérieur
+            hg, ag = ag, hg
 
-    for m in h2h_matches:
-        if m.get("status") != "FINISHED":
-            continue
-        ft = m.get("score", {}).get("fullTime", {})
-        hg = ft.get("home")
-        ag = ft.get("away")
-        if hg is None or ag is None:
-            continue
-        m_home_id = m.get("homeTeam", {}).get("id")
-        m_away_id = m.get("awayTeam", {}).get("id")
-        if hg == ag:
-            draws += 1
-        elif hg > ag:
-            if home_id and m_home_id == home_id:
-                home_wins += 1
-            elif away_id and m_home_id == away_id:
-                away_wins += 1
-            else:
-                home_wins += 1
+        if hg > ag:
+            home_wins += 1
+        elif ag > hg:
+            away_wins += 1
         else:
-            if away_id and m_away_id == away_id:
-                away_wins += 1
-            elif home_id and m_away_id == home_id:
-                home_wins += 1
-            else:
-                away_wins += 1
+            draws += 1
 
     total = home_wins + away_wins + draws
-    if total < 5:
-        _h2h_cache[cache_key] = None
+    if total == 0:
         return None
 
     result = {
@@ -742,16 +780,15 @@ def get_h2h(league_id: int, home_team: str, away_team: str, limit: int = 10) -> 
     }
     print(
         f"[H2H] {home_team} vs {away_team} | "
-        f"{home_wins}W-{draws}D-{away_wins}L | "
+        f"{home_wins}W-{draws}D-{away_wins}L sur {total} matchs | "
         f"home={result['win_rate_home']:.0%} away={result['win_rate_away']:.0%}"
     )
-    _h2h_cache[cache_key] = result
     return result
 
 
 def clear_h2h_cache():
-    global _h2h_cache
-    _h2h_cache = {}
+    global _season_matches_cache
+    _season_matches_cache = {}
 
 
 # ─────────────────────────────────────────────
@@ -769,6 +806,7 @@ def get_fixtures_results_batch(league_id: int, season: int, date: str) -> dict:
     try:
         url    = f"{FOOTBALLDATA_BASE}/competitions/{competition}/matches"
         params = {"dateFrom": date, "dateTo": date}
+        _fd_rate_limit()
         resp   = requests.get(url, headers=_fd_headers(), params=params, timeout=15)
         resp.raise_for_status()
         data   = resp.json()
@@ -802,6 +840,7 @@ def get_all_results_today(date: str) -> dict:
     try:
         url    = f"{FOOTBALLDATA_BASE}/matches"
         params = {"dateFrom": date, "dateTo": date}
+        _fd_rate_limit()
         resp   = requests.get(url, headers=_fd_headers(), params=params, timeout=15)
         resp.raise_for_status()
         data   = resp.json()
