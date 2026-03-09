@@ -21,17 +21,69 @@ state = {
 
 def _get_top_athletes(gender: str, fmt_code: str) -> list:
     """
-    Récupère les top athlètes depuis le classement CdM.
-    Essaie plusieurs formats d'IBU_ID, log la structure reçue.
-    Fallback : résultats des dernières courses du même format.
+    Récupère les top athlètes depuis les résultats des dernières courses.
+    Source : dernières courses officielles du même format et genre (API IBU).
+    Fallback : toutes courses récentes du genre si pas assez de données.
     """
     try:
         from sports.biathlon.biathlon_client import (
-            get_cup_standings, get_competitions, get_results,
-            CURRENT_SEASON, PREV_SEASON
+            get_competitions, get_results, CURRENT_SEASON, PREV_SEASON
         )
     except ImportError:
         return []
+
+    def fetch_athletes_from_races(races, limit=8):
+        seen = {}
+        for race in races[:5]:
+            try:
+                results = get_results(race["race_id"])
+                log.info(f"[Biathlon] résultats {race['race_id']}: {len(results)} athlètes")
+                for r in results[:15]:
+                    ibu_id = r.get("IBU_ID","")
+                    name   = r.get("Name","")
+                    nat    = r.get("Nat","")
+                    rank   = int(r.get("Rank") or 999)
+                    if ibu_id and name and ibu_id not in seen:
+                        seen[ibu_id] = {"ibu_id": ibu_id, "name": name, "nat": nat, "rank": rank}
+            except Exception as e:
+                log.warning(f"[Biathlon] get_results {race.get('race_id')}: {e}")
+        return sorted(seen.values(), key=lambda x: x["rank"])[:limit]
+
+    for season in [CURRENT_SEASON, PREV_SEASON]:
+        try:
+            all_races = get_competitions(season)
+            log.info(f"[Biathlon] {len(all_races)} courses saison {season}")
+
+            # Courses officielles (déjà disputées) du même format et genre
+            matching = [
+                r for r in all_races
+                if r.get("format") == fmt_code
+                and r.get("gender") == gender
+                and r.get("race_id")
+            ]
+            matching = sorted(matching, key=lambda x: x.get("date",""), reverse=True)
+            log.info(f"[Biathlon] {len(matching)} courses {fmt_code}/{gender} trouvées saison {season}")
+
+            if matching:
+                athletes = fetch_athletes_from_races(matching)
+                if len(athletes) >= 2:
+                    return athletes
+
+            # Fallback : toutes courses du genre (pas seulement même format)
+            all_gender = [
+                r for r in all_races
+                if r.get("gender") == gender and r.get("race_id")
+            ]
+            all_gender = sorted(all_gender, key=lambda x: x.get("date",""), reverse=True)
+            if all_gender:
+                athletes = fetch_athletes_from_races(all_gender)
+                if len(athletes) >= 2:
+                    return athletes
+
+        except Exception as e:
+            log.warning(f"[Biathlon] _get_top_athletes saison {season}: {e}")
+
+    return []
 
     # Essai classement CdM
     for season in [CURRENT_SEASON, PREV_SEASON]:
