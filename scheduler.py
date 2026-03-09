@@ -38,6 +38,27 @@ from model import (
 )
 from telegram_bot import send_message, send_daily_summary
 
+# ── Biathlon (optionnel — désactivé si module absent) ──
+BIATHLON_ENABLED = False
+try:
+    import sys as _sys
+    _sys.path.insert(0, os.path.join(os.path.dirname(__file__), "biathlon"))
+    from biathlon.biathlon_client import get_upcoming_races, RACE_FORMATS
+    from biathlon.biathlon_odds   import get_biathlon_events, parse_h2h_odds, find_value_bets
+    from biathlon.biathlon_model  import predict_h2h, detect_h2h_value
+    from biathlon.biathlon_bot    import run_biathlon_analysis, predict_h2h_by_name
+    from biathlon.scheduler import (
+        init_biathlon_db, save_biathlon_bet, get_pending_biathlon_bets,
+        update_biathlon_bet_result, run_biathlon_full_analysis, check_biathlon_results,
+        handle_biathlon_status, handle_biathlon_stats,
+        ANALYSIS_HOUR as BIATHLON_ANALYSIS_HOUR,
+        RESULTS_HOUR  as BIATHLON_RESULTS_HOUR,
+    )
+    BIATHLON_ENABLED = True
+    log.info("🎿 Module biathlon chargé ✅")
+except Exception as _e:
+    log.warning(f"🎿 Module biathlon non disponible : {_e}")
+
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
 log = logging.getLogger(__name__)
 
@@ -808,18 +829,58 @@ def handle_refresh_h2h():
     )
 
 
-BIATHLON_WORKER_URL = os.getenv("BIATHLON_WORKER_URL", "")  # ex: http://biathlon-worker.railway.internal:5001
+def handle_redeploy():
+    """
+    Redéploie les services Railway via l'API GraphQL.
+    Nécessite RAILWAY_API_TOKEN + RAILWAY_SERVICE_ID_FOOT + RAILWAY_SERVICE_ID_BIATHLON
+    dans les variables d'env.
+    """
+    token        = os.getenv("RAILWAY_API_TOKEN", "")
+    svc_foot     = os.getenv("RAILWAY_SERVICE_ID_FOOT", "")
+    svc_biathlon = os.getenv("RAILWAY_SERVICE_ID_BIATHLON", "")
 
-def dispatch_biathlon(cmd: str):
-    """Dispatch une commande /biathlon* vers le worker biathlon via HTTP interne."""
-    if not BIATHLON_WORKER_URL:
-        send_message("⚠️ Worker biathlon non configuré (BIATHLON_WORKER_URL manquant)")
+    if not token:
+        send_message(
+            "⚠️ <b>Redeploy impossible</b>\n"
+            "Variable <code>RAILWAY_API_TOKEN</code> manquante.\n"
+            "<i>Railway → Account Settings → Tokens → New Token</i>"
+        )
         return
-    try:
-        import requests as req
-        req.get(f"{BIATHLON_WORKER_URL}", params={"cmd": cmd}, timeout=5)
-    except Exception as e:
-        send_message(f"⚠️ Worker biathlon injoignable : {e}")
+
+    import requests as req
+    headers = {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
+    results = []
+
+    for name, svc_id in [("⚽ Foot", svc_foot), ("🎿 Biathlon", svc_biathlon)]:
+        if not svc_id:
+            results.append(f"⚠️ {name} : SERVICE_ID manquant")
+            continue
+        try:
+            resp = req.post(
+                "https://backboard.railway.app/graphql/v2",
+                headers=headers,
+                json={"query": f"""
+                    mutation {{
+                        serviceInstanceRedeploy(serviceId: "{svc_id}")
+                    }}
+                """},
+                timeout=10
+            )
+            data = resp.json()
+            if data.get("data", {}).get("serviceInstanceRedeploy"):
+                results.append(f"✅ {name} : redéploiement lancé")
+            else:
+                errors = data.get("errors", [{}])
+                results.append(f"❌ {name} : {errors[0].get('message', 'erreur inconnue')}")
+        except Exception as e:
+            results.append(f"❌ {name} : {e}")
+
+    send_message(
+        "🚀 <b>Redeploy Railway</b>\n\n" +
+        "\n".join(results) +
+        "\n\n<i>Le bot sera indisponible ~30s pendant le redémarrage.</i>"
+    )
+
 
 COMMANDS = {
     "/help":          handle_help,
@@ -836,12 +897,13 @@ COMMANDS = {
     "/h2h":           handle_h2h,
     "/refreshh2h":    handle_refresh_h2h,
     "/web":           handle_web,
-    "/helpbiathlon":  lambda: dispatch_biathlon("/biathlon"),
-    # Biathlon — dispatchés vers le worker dédié
-    "/biathlon":         lambda: dispatch_biathlon("/biathlon"),
-    "/biathlonrun":      lambda: dispatch_biathlon("/biathlonrun"),
-    "/biathlonresults":  lambda: dispatch_biathlon("/biathlonresults"),
-    "/biathlonstats":    lambda: dispatch_biathlon("/biathlonstats"),
+    "/redeploy":      handle_redeploy,
+    # ── Biathlon ──
+    "/helpbiathlon":    handle_help_biathlon,
+    "/biathlon":        lambda: threading.Thread(target=handle_biathlon_cmd, daemon=True).start(),
+    "/biathlonrun":     lambda: threading.Thread(target=run_biathlon_cmd,    daemon=True).start(),
+    "/biathlonresults": lambda: threading.Thread(target=results_biathlon_cmd,daemon=True).start(),
+    "/biathlonstats":   lambda: threading.Thread(target=stats_biathlon_cmd,  daemon=True).start(),
 }
 
 
@@ -895,12 +957,6 @@ def telegram_polling():
                     except Exception as e:
                         log.error(f"  Erreur {text}: {e}")
                         send_message(f"❌ Erreur {text} : {e}")
-                elif text.startswith("/biathlon") or text.startswith("/b_"):
-                    # Commande biathlon non reconnue → dispatch générique
-                    dispatch_biathlon(text)
-                elif text.startswith("/help") and "biathlon" in text:
-                    # /helpbiathlon → dispatcher vers /biathlon
-                    dispatch_biathlon("/biathlon")
                 elif text.startswith("/"):
                     # Commande inconnue → silence (pas de flood help)
                     log.info(f"  Commande inconnue ignorée : {text}")
@@ -941,12 +997,29 @@ def run_scheduler():
         kwargs={"silent": False}
     )
 
-    log.info(f"⏰ Scheduler : refresh 06h, analyse {SCHEDULER_HOUR:02d}h, résultats 23h UTC")
+    # Jobs biathlon (si module disponible)
+    if BIATHLON_ENABLED:
+        init_biathlon_db()
+        scheduler.add_job(
+            run_biathlon_full_analysis, "cron",
+            hour=int(os.getenv("BIATHLON_ANALYSIS_HOUR", 7)), minute=30,
+            id="biathlon_analysis", kwargs={"silent": False}
+        )
+        scheduler.add_job(
+            check_biathlon_results, "cron",
+            hour=int(os.getenv("BIATHLON_RESULTS_HOUR", 22)), minute=0,
+            id="biathlon_results", kwargs={"silent": False}
+        )
+        log.info("🎿 Jobs biathlon ajoutés au scheduler")
 
+    log.info(f"⏰ Foot: refresh 06h, analyse {SCHEDULER_HOUR:02d}h, résultats 23h UTC")
+
+    biathlon_status = "✅ opérationnel" if BIATHLON_ENABLED else "❌ non disponible"
     send_message(
-        f"🐺 <b>Le Loup de Wall Bet</b> — {datetime.now(timezone.utc).strftime('%H:%M UTC')}\n"
-        f"⚽ Worker Foot <b>opérationnel</b>\n"
-        f"💬 /help · /helpbiathlon pour le biathlon"
+        f"🐺 <b>Le Loup de Wall Bet est lancé</b> — {datetime.now(timezone.utc).strftime('%H:%M UTC')}\n"
+        f"⚽ Foot : ✅ opérationnel\n"
+        f"🎿 Biathlon : {biathlon_status}\n"
+        f"💬 /help · /helpbiathlon"
     )
 
     try:
