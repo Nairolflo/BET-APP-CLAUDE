@@ -211,6 +211,7 @@ def get_recent_race_ids(gender: str = "M", fmt_code: str = "SP",
     """
     events = get_events(season)
     race_ids = []
+    all_fmt_seen = set()
     for event in events:
         event_id = event.get("EventId", "")
         if not event_id:
@@ -218,9 +219,10 @@ def get_recent_race_ids(gender: str = "M", fmt_code: str = "SP",
         races = get_competitions(event_id)
         for r in races:
             race_id  = r.get("RaceId", "")
-            desc     = r.get("ShortDescription", "")
-            fmt      = r.get("RaceTypeId", r.get("RaceType", ""))
+            desc     = r.get("ShortDescription", r.get("Description", ""))
+            fmt      = r.get("RaceTypeId", r.get("RaceType", r.get("Disc", "")))
             status   = r.get("Status", "")
+            all_fmt_seen.add(fmt)
 
             if status != "Official":
                 continue
@@ -234,6 +236,8 @@ def get_recent_race_ids(gender: str = "M", fmt_code: str = "SP",
 
             race_ids.append((r.get("StartTime",""), race_id))
 
+    log.info(f"[IBU] get_recent_race_ids {fmt_code}/{gender}/{season}: "
+             f"formats vus={all_fmt_seen}, trouvés={len(race_ids)}")
     # Trier par date décroissante et prendre les N derniers
     race_ids.sort(reverse=True)
     return [rid for _, rid in race_ids[:n]]

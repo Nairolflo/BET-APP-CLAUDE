@@ -71,11 +71,11 @@ def handle_stats():
         cur.execute("""
             SELECT
                 COUNT(*) as total,
-                SUM(CASE WHEN result = 1 THEN 1 ELSE 0 END) as wins,
-                SUM(CASE WHEN result = 0 THEN 1 ELSE 0 END) as losses,
-                SUM(CASE WHEN result = -1 THEN 1 ELSE 0 END) as pending,
-                AVG(CASE WHEN result != -1 THEN value_pct ELSE NULL END) as avg_value,
-                AVG(CASE WHEN result != -1 THEN odd ELSE NULL END) as avg_odd
+                SUM(CASE WHEN result::text = '1'  THEN 1 ELSE 0 END) as wins,
+                SUM(CASE WHEN result::text = '0'  THEN 1 ELSE 0 END) as losses,
+                SUM(CASE WHEN result::text = '-1' THEN 1 ELSE 0 END) as pending,
+                AVG(CASE WHEN result::text != '-1' THEN value_pct ELSE NULL END) as avg_value,
+                AVG(CASE WHEN result::text != '-1' THEN odd ELSE NULL END) as avg_odd
             FROM biathlon_bets
         """)
         from core.database import row_to_dict
