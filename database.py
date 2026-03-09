@@ -142,6 +142,24 @@ def init_db():
             """)
 
         conn.commit()
+
+        # ── Migration : colonnes bete_noire (ajoutées après création initiale)
+        try:
+            if is_postgres():
+                cur.execute("ALTER TABLE bets ADD COLUMN IF NOT EXISTS bete_noire INTEGER DEFAULT 0")
+                cur.execute("ALTER TABLE bets ADD COLUMN IF NOT EXISTS bete_noire_rate REAL DEFAULT 0")
+            else:
+                # SQLite ne supporte pas IF NOT EXISTS sur ALTER TABLE
+                cur.execute("PRAGMA table_info(bets)")
+                cols = [r[1] for r in cur.fetchall()]
+                if "bete_noire" not in cols:
+                    cur.execute("ALTER TABLE bets ADD COLUMN bete_noire INTEGER DEFAULT 0")
+                if "bete_noire_rate" not in cols:
+                    cur.execute("ALTER TABLE bets ADD COLUMN bete_noire_rate REAL DEFAULT 0")
+            conn.commit()
+        except Exception as e:
+            log.warning(f"[DB] Migration bete_noire ignorée : {e}")
+
         log.info("[DB] Database initialized.")
         print("[DB] Database initialized.")
     finally:
