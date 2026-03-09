@@ -836,6 +836,7 @@ COMMANDS = {
     "/h2h":           handle_h2h,
     "/refreshh2h":    handle_refresh_h2h,
     "/web":           handle_web,
+    "/helpbiathlon":  lambda: dispatch_biathlon("/biathlon"),
     # Biathlon — dispatchés vers le worker dédié
     "/biathlon":         lambda: dispatch_biathlon("/biathlon"),
     "/biathlonrun":      lambda: dispatch_biathlon("/biathlonrun"),
@@ -894,10 +895,15 @@ def telegram_polling():
                     except Exception as e:
                         log.error(f"  Erreur {text}: {e}")
                         send_message(f"❌ Erreur {text} : {e}")
-                elif text.startswith("/biathlon"):
-                    pass  # commandes biathlon ignorées par le bot foot
+                elif text.startswith("/biathlon") or text.startswith("/b_"):
+                    # Commande biathlon non reconnue → dispatch générique
+                    dispatch_biathlon(text)
+                elif text.startswith("/help") and "biathlon" in text:
+                    # /helpbiathlon → dispatcher vers /biathlon
+                    dispatch_biathlon("/biathlon")
                 elif text.startswith("/"):
-                    handle_help()
+                    # Commande inconnue → silence (pas de flood help)
+                    log.info(f"  Commande inconnue ignorée : {text}")
 
         except requests.exceptions.Timeout:
             pass
