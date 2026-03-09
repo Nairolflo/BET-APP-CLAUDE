@@ -4,7 +4,7 @@
 <div class="container">
     <div class="page-header">
         <h1>⚙️ Configuration</h1>
-        <p>Paramètres actuels du bot — modifiables via les variables Railway</p>
+        <p>Paramètres actifs — modifiables via les variables Railway</p>
     </div>
 
     <div class="grid-2">
@@ -13,81 +13,87 @@
             <h2>🧮 Paramètres du modèle</h2>
             <table>
                 <tbody>
-                    <tr><td style="color:var(--text-dim);width:55%">Seuil de value minimum</td>
-                        <td><strong>+{{ (config.value_threshold * 100)|round(1) }}%</strong></td></tr>
-                    <tr><td style="color:var(--text-dim)">Probabilité minimum</td>
-                        <td><strong>{{ (config.min_probability * 100)|round(0)|int }}%</strong></td></tr>
-                    <tr><td style="color:var(--text-dim)">Poids Poisson</td>
-                        <td><strong>{{ (config.poisson_weight * 100)|round(0)|int }}%</strong>
-                            <span style="color:var(--text-dim);font-size:.8rem"> / Marché {{ ((1-config.poisson_weight) * 100)|round(0)|int }}%</span></td></tr>
-                    <tr><td style="color:var(--text-dim)">Jours analysés à l'avance</td>
-                        <td><strong>{{ config.days_ahead }} jours</strong></td></tr>
-                    <tr><td style="color:var(--text-dim)">Saison active</td>
-                        <td><strong>{{ config.season }}/{{ config.season + 1 }}</strong></td></tr>
-                    <tr><td style="color:var(--text-dim)">Saisons H2H</td>
-                        <td><strong>{{ config.h2h_seasons }} saisons</strong>
-                            <span style="color:var(--text-dim);font-size:.8rem"> ({{ config.season }}–{{ config.season - config.h2h_seasons + 1 }})</span></td></tr>
-                    <tr><td style="color:var(--text-dim)">Fourchette de cotes</td>
-                        <td><strong>1.40 – 2.30</strong></td></tr>
-                    <tr><td style="color:var(--text-dim)">Marchés actifs</td>
-                        <td><strong>Home Win, Away Win, Over 2.5, Over 3.5</strong></td></tr>
+                    <tr><td style="color:var(--text-dim);width:60%">Value minimum</td><td><strong>+{{ (config.value_threshold * 100)|round(1) }}%</strong></td></tr>
+                    <tr><td style="color:var(--text-dim)">Probabilité minimum</td><td><strong>{{ (config.min_probability * 100)|round(0)|int }}%</strong></td></tr>
+                    <tr><td style="color:var(--text-dim)">Poids Poisson / Marché</td><td><strong>{{ (config.poisson_weight * 100)|round(0)|int }}% / {{ ((1-config.poisson_weight)*100)|round(0)|int }}%</strong></td></tr>
+                    <tr><td style="color:var(--text-dim)">Fenêtre analyse</td><td><strong>{{ config.days_ahead }} jours</strong></td></tr>
+                    <tr><td style="color:var(--text-dim)">Saison active</td><td><strong>{{ config.season }}/{{ config.season + 1 }}</strong></td></tr>
+                    <tr><td style="color:var(--text-dim)">Saisons H2H</td><td><strong>{{ config.h2h_seasons }}</strong> <span style="color:var(--text-dim);font-size:.8rem">({{ config.season }}–{{ config.season - config.h2h_seasons + 1 }})</span></td></tr>
+                    <tr><td style="color:var(--text-dim)">Fourchette cotes</td><td><strong>1.40 – 2.30</strong></td></tr>
+                    <tr><td style="color:var(--text-dim)">Marchés</td><td><strong>Home/Away Win + Over 0.5 → 4.5</strong></td></tr>
                 </tbody>
             </table>
         </div>
 
-        <!-- Scheduler -->
+        <!-- Quota API avec jauge -->
         <div class="card">
-            <h2>⏰ Scheduler & API</h2>
-            <table>
-                <tbody>
-                    <tr><td style="color:var(--text-dim);width:55%">Refresh stats équipes</td>
-                        <td><strong>06h00 UTC</strong> <span class="chip">quotidien</span></td></tr>
-                    <tr><td style="color:var(--text-dim)">Analyse value bets</td>
-                        <td><strong>{{ "%02d"|format(config.scheduler_hour) }}h00 UTC</strong> <span class="chip">quotidien</span></td></tr>
-                    <tr><td style="color:var(--text-dim)">Vérification résultats</td>
-                        <td><strong>23h00 UTC</strong> <span class="chip">quotidien</span></td></tr>
-                    <tr><td style="color:var(--text-dim)">The Odds API</td>
-                        <td>{% if config.has_odds_key %}<span class="badge badge-win">✅ Configurée</span>{% else %}<span class="badge badge-loss">❌ Manquante</span>{% endif %}</td></tr>
-                    <tr><td style="color:var(--text-dim)">Football-Data.org</td>
-                        <td>{% if config.has_footballdata_key %}<span class="badge badge-win">✅ Configurée</span>{% else %}<span class="badge badge-loss">❌ Manquante</span>{% endif %}</td></tr>
-                    <tr><td style="color:var(--text-dim)">Telegram Bot</td>
-                        <td>{% if config.has_telegram_token %}<span class="badge badge-win">✅ Configuré</span>{% else %}<span class="badge badge-loss">❌ Manquant</span>{% endif %}</td></tr>
-                </tbody>
-            </table>
+            <h2>📡 Quota The Odds API</h2>
+            <div id="api-loading" style="color:var(--text-dim);font-size:.9rem">Chargement...</div>
+            <div id="api-quota" style="display:none">
+                <div style="display:flex;justify-content:space-between;margin-bottom:.5rem">
+                    <span style="font-size:.85rem;color:var(--text-dim)">Requêtes utilisées</span>
+                    <span id="api-pct" style="font-size:.85rem;font-weight:700"></span>
+                </div>
+                <div class="progress mb1" style="height:12px">
+                    <div id="api-bar" class="progress-bar" style="height:100%"></div>
+                </div>
+                <div style="display:flex;justify-content:space-between;font-size:.85rem;margin-top:.8rem">
+                    <div>✅ Utilisées : <strong id="api-used"></strong></div>
+                    <div>🟢 Restantes : <strong id="api-remaining"></strong></div>
+                    <div>📊 Total : <strong id="api-total"></strong></div>
+                </div>
+                <div style="margin-top:.8rem;font-size:.78rem;color:var(--text-dim)">
+                    ~{{ config.leagues|length * 2 }} requêtes par run · analyse {{ config.scheduler_hour }}h00 UTC
+                </div>
+            </div>
+            <div id="api-error" style="display:none;color:var(--fail);font-size:.85rem"></div>
         </div>
     </div>
 
-    <!-- Forme récente -->
-    <div class="card mt2">
-        <h2>⚡ Ajustements forme récente</h2>
-        <div class="grid-3" style="font-size:.85rem">
-            <div>
-                <div class="card-title">Momentum attaque</div>
-                <table style="font-size:.82rem">
-                    <tr><td style="color:var(--text-dim)">≥ 4 victoires consécutives</td><td class="c-high">+10%</td></tr>
-                    <tr><td style="color:var(--text-dim)">≥ 3 victoires</td><td class="c-high">+8%</td></tr>
-                    <tr><td style="color:var(--text-dim)">≥ 2 victoires</td><td class="c-high">+4%</td></tr>
-                    <tr><td style="color:var(--text-dim)">≥ 4 défaites</td><td class="c-neg">-10%</td></tr>
-                    <tr><td style="color:var(--text-dim)">≥ 3 défaites</td><td class="c-neg">-8%</td></tr>
-                </table>
+    <div class="grid-2 mt2">
+        <!-- Scheduler -->
+        <div class="card">
+            <h2>⏰ Scheduler</h2>
+            <table>
+                <tbody>
+                    <tr><td style="color:var(--text-dim);width:60%">Refresh stats</td><td><strong>06h00 UTC</strong></td></tr>
+                    <tr><td style="color:var(--text-dim)">Analyse value bets</td><td><strong>{{ "%02d"|format(config.scheduler_hour) }}h00 UTC</strong></td></tr>
+                    <tr><td style="color:var(--text-dim)">Vérif. résultats</td><td><strong>23h00 UTC</strong></td></tr>
+                    <tr><td style="color:var(--text-dim)">Retry 429 FD</td><td><strong>10 min auto</strong></td></tr>
+                </tbody>
+            </table>
+
+            <div style="margin-top:1rem;border-top:1px solid var(--border);padding-top:1rem">
+                <h3 style="margin-bottom:.5rem">🔑 APIs</h3>
+                <div style="display:flex;flex-direction:column;gap:.4rem;font-size:.85rem">
+                    <div>The Odds API {% if config.has_odds_key %}<span class="badge badge-win">✅ OK</span>{% else %}<span class="badge badge-loss">❌ Manquante</span>{% endif %}</div>
+                    <div>Football-Data.org {% if config.has_footballdata_key %}<span class="badge badge-win">✅ OK</span>{% else %}<span class="badge badge-loss">❌ Manquante</span>{% endif %}</div>
+                    <div>Telegram Bot {% if config.has_telegram_token %}<span class="badge badge-win">✅ OK</span>{% else %}<span class="badge badge-loss">❌ Manquant</span>{% endif %}</div>
+                </div>
             </div>
-            <div>
-                <div class="card-title">Fatigue</div>
-                <table style="font-size:.82rem">
-                    <tr><td style="color:var(--text-dim)">≤ 2 jours de repos</td><td class="c-neg">-8% att, +5% déf</td></tr>
-                    <tr><td style="color:var(--text-dim)">≤ 3 jours de repos</td><td class="c-neg">-4% att</td></tr>
-                    <tr><td style="color:var(--text-dim)">&gt; 10 jours (rouille)</td><td class="c-neg">-3% att</td></tr>
-                    <tr><td style="color:var(--text-dim)">Neutre (4-10 jours)</td><td style="color:var(--text-dim)">×1.0</td></tr>
-                </table>
-            </div>
-            <div>
-                <div class="card-title">Bête Noire H2H</div>
-                <table style="font-size:.82rem">
-                    <tr><td style="color:var(--text-dim)">≥ 70% sur 5+ matchs</td><td style="color:#ff9999">+4% proba</td></tr>
-                    <tr><td style="color:var(--text-dim)">≥ 80% sur 8+ matchs</td><td style="color:#ff9999">+6% proba</td></tr>
-                    <tr><td style="color:var(--text-dim)">≥ 90% sur 10+ matchs</td><td style="color:#ff9999">+8% proba</td></tr>
-                    <tr><td style="color:var(--text-dim)">Données</td><td style="color:var(--text-dim)">3 saisons batch</td></tr>
-                </table>
+        </div>
+
+        <!-- Ajustements forme -->
+        <div class="card">
+            <h2>⚡ Ajustements forme récente</h2>
+            <div style="display:grid;grid-template-columns:1fr 1fr;gap:1rem;font-size:.82rem">
+                <div>
+                    <div style="color:var(--text-dim);font-size:.72rem;text-transform:uppercase;letter-spacing:.5px;margin-bottom:.5rem">Momentum attaque</div>
+                    <div>≥4 victoires → <span class="c-high">+10%</span></div>
+                    <div>≥3 victoires → <span class="c-high">+8%</span></div>
+                    <div>≥2 victoires → <span class="c-high">+4%</span></div>
+                    <div>≥3 défaites → <span class="c-neg">-8%</span></div>
+                    <div>≥4 défaites → <span class="c-neg">-10%</span></div>
+                </div>
+                <div>
+                    <div style="color:var(--text-dim);font-size:.72rem;text-transform:uppercase;letter-spacing:.5px;margin-bottom:.5rem">Fatigue & Bête Noire</div>
+                    <div>Repos ≤2j → <span class="c-neg">-8% att</span></div>
+                    <div>Repos ≤3j → <span class="c-neg">-4% att</span></div>
+                    <div>&gt;10j (rouille) → <span class="c-neg">-3%</span></div>
+                    <div>H2H ≥70%/5m → <span style="color:#ff9999">+4%</span></div>
+                    <div>H2H ≥80%/8m → <span style="color:#ff9999">+6%</span></div>
+                    <div>H2H ≥90%/10m → <span style="color:#ff9999">+8%</span></div>
+                </div>
             </div>
         </div>
     </div>
@@ -97,7 +103,7 @@
         <h2>🌍 Ligues configurées ({{ config.leagues|length }})</h2>
         <div style="display:flex;flex-wrap:wrap;gap:.6rem">
         {% for l in config.leagues %}
-        <div style="display:flex;align-items:center;gap:.5rem;background:var(--surface2);border:1px solid var(--border);border-radius:8px;padding:.5rem .9rem;font-size:.85rem">
+        <div style="display:flex;align-items:center;gap:.4rem;background:var(--surface2);border:1px solid var(--border);border-radius:8px;padding:.45rem .85rem;font-size:.83rem">
             <span>{{ l.flag }}</span>
             <span>{{ l.name }}</span>
             {% if l.h2h %}<span class="chip" style="color:#ff9999">🔥 H2H</span>{% endif %}
@@ -109,15 +115,40 @@
 
     <!-- Variables Railway -->
     <div class="card mt2">
-        <h2>🚀 Variables d'environnement Railway</h2>
-        <div style="background:var(--bg);border:1px solid var(--border);border-radius:8px;padding:1rem;font-family:monospace;font-size:.82rem;color:var(--accent2)">
-            <div>VALUE_THRESHOLD=<span style="color:var(--text)">{{ config.value_threshold }}</span></div>
-            <div>MIN_PROBABILITY=<span style="color:var(--text)">{{ config.min_probability }}</span></div>
-            <div>SEASON=<span style="color:var(--text)">{{ config.season }}</span></div>
-            <div>SCHEDULER_DAYS_AHEAD=<span style="color:var(--text)">{{ config.days_ahead }}</span></div>
-            <div>SCHEDULER_HOUR=<span style="color:var(--text)">{{ config.scheduler_hour }}</span></div>
-            <div>LEAGUES=<span style="color:var(--text)">39,61,78,135,140,88,94,40,2,144,203,179,3</span></div>
+        <h2>🚀 Variables Railway</h2>
+        <div style="background:var(--bg);border:1px solid var(--border);border-radius:8px;padding:1rem;font-family:monospace;font-size:.82rem;line-height:1.8">
+            <div><span style="color:var(--accent)">VALUE_THRESHOLD</span>=<span style="color:var(--accent2)">{{ config.value_threshold }}</span></div>
+            <div><span style="color:var(--accent)">MIN_PROBABILITY</span>=<span style="color:var(--accent2)">{{ config.min_probability }}</span></div>
+            <div><span style="color:var(--accent)">SEASON</span>=<span style="color:var(--accent2)">{{ config.season }}</span></div>
+            <div><span style="color:var(--accent)">SCHEDULER_DAYS_AHEAD</span>=<span style="color:var(--accent2)">{{ config.days_ahead }}</span></div>
+            <div><span style="color:var(--accent)">SCHEDULER_HOUR</span>=<span style="color:var(--accent2)">{{ config.scheduler_hour }}</span></div>
+            <div><span style="color:var(--accent)">LEAGUES</span>=<span style="color:var(--accent2)">39,61,78,135,140,88,94,40,2,144,203,179,3</span></div>
         </div>
     </div>
 </div>
+
+<script>
+fetch('/api/quota')
+    .then(r => r.json())
+    .then(d => {
+        document.getElementById('api-loading').style.display = 'none';
+        if (d.error) {
+            document.getElementById('api-error').style.display = 'block';
+            document.getElementById('api-error').textContent = '❌ ' + d.error;
+            return;
+        }
+        const pct = Math.round(d.used / Math.max(d.total, 1) * 100);
+        document.getElementById('api-quota').style.display = 'block';
+        document.getElementById('api-pct').textContent = pct + '%';
+        document.getElementById('api-used').textContent = d.used;
+        document.getElementById('api-remaining').textContent = d.remaining;
+        document.getElementById('api-total').textContent = d.total;
+        const bar = document.getElementById('api-bar');
+        bar.style.width = pct + '%';
+        bar.style.background = pct > 80 ? 'var(--fail)' : pct > 50 ? 'var(--yellow)' : 'var(--success)';
+    })
+    .catch(() => {
+        document.getElementById('api-loading').textContent = 'Impossible de charger le quota.';
+    });
+</script>
 {% endblock %}

@@ -324,8 +324,8 @@ def find_value_bets(predictions: dict, odds: dict,
 
     Critères :
       - Cote 1.40–2.30 (favoris clairs)
-      - Pas de nul, pas d'Under, pas d'Over 1.5
-      - Over 2.5 et Over 3.5 uniquement
+      - Pas de nul
+      - Tous les Over/Under disponibles (0.5, 1.5, 2.5, 3.5...)
       - Ecart Poisson/marché < 15%
       - Bonus bête noire H2H si applicable
       - Poisson weight 40% (marché plus fiable)
@@ -386,20 +386,19 @@ def find_value_bets(predictions: dict, odds: dict,
                 market_probs.get(market_key),
             )
 
-        # Over 2.5 et Over 3.5 uniquement
+        # Tous les Over/Under disponibles (0.5, 1.5, 2.5, 3.5, 4.5...)
         for bk_key, bk_odd in bk_odds.items():
-            if not bk_key.startswith("over_"):
+            if not (bk_key.startswith("over_") or bk_key.startswith("under_")):
                 continue
-            parts = bk_key.split("_", 1)
+            direction = "over" if bk_key.startswith("over_") else "under"
+            suffix = bk_key.split("_", 1)[1]
             try:
-                threshold = float(parts[1].replace("_", "."))
+                threshold = float(suffix.replace("_", "."))
             except ValueError:
                 continue
-            if threshold not in (2.5, 3.5):
-                continue
-            pred_key = f"over_{parts[1]}"
+            pred_key = bk_key  # ex: "over_2_5" ou "under_1_5"
             check_market(
-                pred_key, f"Over {threshold}",
+                pred_key, f"{'Over' if direction == 'over' else 'Under'} {threshold}",
                 predictions.get(pred_key),
                 bk_odd,
                 market_probs.get(pred_key),

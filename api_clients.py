@@ -16,17 +16,58 @@ from typing import Optional
 _fd_last_call   = 0.0
 FD_MIN_INTERVAL = 6.5  # secondes minimum entre chaque appel FD
 
+# ── Tracker tokens Odds API ──────────────────
+_odds_tokens = {"remaining": None, "used": None, "last_update": None}
+
+def get_odds_quota() -> dict:
+    """Retourne les tokens Odds API restants depuis le cache."""
+    return dict(_odds_tokens)
+
+def _update_odds_quota(headers: dict):
+    """Met à jour le cache depuis les headers de réponse Odds API."""
+    try:
+        rem = headers.get("x-requests-remaining")
+        used = headers.get("x-requests-used")
+        if rem is not None:
+            _odds_tokens["remaining"] = int(rem)
+        if used is not None:
+            _odds_tokens["used"] = int(used)
+        from datetime import datetime, timezone
+        _odds_tokens["last_update"] = datetime.now(timezone.utc).isoformat()
+    except Exception:
+        pass
+
 def _fd_rate_limit():
     """Attend si nécessaire pour respecter la limite 10 req/min."""
     global _fd_last_call
     elapsed = time.time() - _fd_last_call
     if elapsed < FD_MIN_INTERVAL:
-        wait = FD_MIN_INTERVAL - elapsed
-        time.sleep(wait)
+        time.sleep(FD_MIN_INTERVAL - elapsed)
     _fd_last_call = time.time()
 
-# Ligues avec trop de matchs — H2H désactivé pour éviter explosion d'appels API
-H2H_DISABLED_LEAGUES = {40, 71, 262, 179, 144, 203, 3}
+def _fd_get(url: str, params: dict = None, retries: int = 3) -> dict:
+    """
+    Wrapper GET football-data.org avec rate limit + retry automatique sur 429.
+    Attend 65 secondes (1 minute + marge) avant de réessayer.
+    """
+    for attempt in range(retries):
+        _fd_rate_limit()
+        try:
+            resp = requests.get(url, headers=_fd_headers(), params=params or {}, timeout=20)
+            if resp.status_code == 429:
+                wait = 65 + attempt * 30  # 65s, 95s, 125s
+                print(f"[FD] 429 Rate limit — attente {wait}s avant retry {attempt+1}/{retries}...")
+                time.sleep(wait)
+                continue
+            resp.raise_for_status()
+            return resp.json()
+        except Exception as e:
+            if attempt == retries - 1:
+                raise
+            print(f"[FD] Erreur attempt {attempt+1}: {e} — retry dans 10s")
+            time.sleep(10)
+    return {}
+
 
 # ─────────────────────────────────────────────
 # CONFIG
@@ -176,6 +217,7 @@ def get_fixtures(league_id: int, season: int, days_ahead: int = 10) -> list:
     try:
         resp = requests.get(url, params=params, timeout=15)
         resp.raise_for_status()
+        _update_odds_quota(resp.headers)
         events = resp.json()
     except Exception as e:
         print(f"[get_fixtures] Erreur league {league_id}: {e}")
@@ -227,6 +269,7 @@ def get_odds(league_id: int) -> list:
     try:
         resp = requests.get(url, params=params, timeout=15)
         resp.raise_for_status()
+        _update_odds_quota(resp.headers)
         events = resp.json()
     except Exception as e:
         print(f"[get_odds] Erreur league {league_id}: {e}")
@@ -423,10 +466,7 @@ def get_team_standings(league_id: int, season: int) -> list:
     if competition and key:
         try:
             url  = f"{FOOTBALLDATA_BASE}/competitions/{competition}/standings"
-            _fd_rate_limit()
-            resp = requests.get(url, headers=_fd_headers(), timeout=15)
-            resp.raise_for_status()
-            data = resp.json()
+            data = _fd_get(url)
 
             table = None
             for s in data.get("standings", []):
@@ -548,10 +588,8 @@ def get_recent_form(league_id: int, season: int) -> dict:
     try:
         url    = f"{FOOTBALLDATA_BASE}/competitions/{competition}/matches"
         params = {"dateFrom": date_from, "dateTo": date_to, "status": "FINISHED"}
-        _fd_rate_limit()
-        resp   = requests.get(url, headers=_fd_headers(), params=params, timeout=15)
-        resp.raise_for_status()
-        matches = resp.json().get("matches", [])
+        data    = _fd_get(url, params)
+        matches = data.get("matches", [])
     except Exception as e:
         print(f"[get_recent_form] Erreur FD league {league_id}: {e}")
         return {}
@@ -675,10 +713,8 @@ def prefetch_season_matches(league_id: int, seasons: list) -> list:
         try:
             url    = f"{FOOTBALLDATA_BASE}/competitions/{competition}/matches"
             params = {"season": season, "status": "FINISHED"}
-            _fd_rate_limit()
-            resp = requests.get(url, headers=_fd_headers(), params=params, timeout=15)
-            resp.raise_for_status()
-            matches = resp.json().get("matches", [])
+            data    = _fd_get(url, params)
+            matches = data.get("matches", [])
 
             for m in matches:
                 ft = m.get("score", {}).get("fullTime", {})
@@ -791,6 +827,22 @@ def clear_h2h_cache():
     _season_matches_cache = {}
 
 
+
+def get_odds_api_usage() -> dict:
+    """Retourne le nombre de requêtes utilisées/restantes sur The Odds API."""
+    key = os.getenv("ODDS_API_KEY", "")
+    if not key:
+        return {"used": 0, "remaining": 0, "error": "Clé manquante"}
+    try:
+        # Appel léger sur sports pour récupérer les headers X-Requests-*
+        url  = f"{ODDS_API_BASE}/sports"
+        resp = requests.get(url, params={"apiKey": key}, timeout=10)
+        used      = int(resp.headers.get("x-requests-used", 0))
+        remaining = int(resp.headers.get("x-requests-remaining", 0))
+        return {"used": used, "remaining": remaining, "total": used + remaining}
+    except Exception as e:
+        return {"used": 0, "remaining": 0, "error": str(e)}
+
 # ─────────────────────────────────────────────
 # RESULTATS — football-data.org
 # ─────────────────────────────────────────────
@@ -806,10 +858,7 @@ def get_fixtures_results_batch(league_id: int, season: int, date: str) -> dict:
     try:
         url    = f"{FOOTBALLDATA_BASE}/competitions/{competition}/matches"
         params = {"dateFrom": date, "dateTo": date}
-        _fd_rate_limit()
-        resp   = requests.get(url, headers=_fd_headers(), params=params, timeout=15)
-        resp.raise_for_status()
-        data   = resp.json()
+        data = _fd_get(url, params)
     except Exception as e:
         print(f"[results_batch] Erreur: {e}")
         return {}
@@ -840,10 +889,7 @@ def get_all_results_today(date: str) -> dict:
     try:
         url    = f"{FOOTBALLDATA_BASE}/matches"
         params = {"dateFrom": date, "dateTo": date}
-        _fd_rate_limit()
-        resp   = requests.get(url, headers=_fd_headers(), params=params, timeout=15)
-        resp.raise_for_status()
-        data   = resp.json()
+        data = _fd_get(url, params)
     except Exception as e:
         print(f"[all_results] Erreur: {e}")
         return {}

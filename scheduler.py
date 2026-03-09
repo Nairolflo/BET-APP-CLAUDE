@@ -26,6 +26,7 @@ from database import (
     delete_today_pending_bets, update_bet_result, get_pending_bets, reset_all_bets,
 )
 from api_clients import (
+    get_odds_quota,
     get_fixtures, get_odds, get_team_standings,
     get_fixtures_results_batch, get_all_results_today,
     normalize_team_name, get_h2h, clear_h2h_cache,
@@ -405,6 +406,8 @@ def handle_help():
         "🏆 /results  — Vérifier les résultats\n"
         "🌐 /web      — Lien page web\n"
         "📅 /today    — Paris du jour uniquement\n"
+        "📡 /api      — Quota The Odds API\n"
+        "📡 /api      — Tokens API restants\n"
         "🗑 /reset    — Effacer tous les paris\n\n"
         f"<i>Analyse auto : {SCHEDULER_HOUR:02d}h00 UTC chaque jour</i>"
     )
@@ -571,6 +574,28 @@ def handle_web():
         send_message("⚠️ Variable WEB_URL non configurée dans Railway.")
 
 
+def handle_api():
+    from api_clients import get_odds_api_usage
+    usage = get_odds_api_usage()
+    if usage.get("error"):
+        send_message(f"❌ <b>Erreur API</b> : {usage['error']}")
+        return
+    used      = usage.get("used", 0)
+    remaining = usage.get("remaining", 0)
+    total     = usage.get("total", used + remaining)
+    pct_used  = round(used / max(total, 1) * 100, 1)
+    bar_filled = int(pct_used / 10)
+    bar = "█" * bar_filled + "░" * (10 - bar_filled)
+    send_message(
+        f"📡 <b>Quota The Odds API</b>\n\n"
+        f"[{bar}] {pct_used}%\n\n"
+        f"✅ Utilisées : <b>{used}</b>\n"
+        f"🟢 Restantes : <b>{remaining}</b>\n"
+        f"📊 Total : <b>{total}</b>/mois\n\n"
+        f"<i>Chaque run utilise ~{len([39,61,78,135,140,88,94,40,2,144,203,179,3]) * 2} requêtes</i>"
+    )
+
+
 def handle_today():
     from datetime import datetime
     today = datetime.now(timezone.utc).date().isoformat()
@@ -603,6 +628,42 @@ def handle_today():
     send_message(msg)
 
 
+def handle_api():
+    from api_clients import get_odds_quota
+    quota = get_odds_quota()
+    remaining = quota.get("remaining")
+    used      = quota.get("used")
+    updated   = quota.get("last_update", "")[:16].replace("T", " ") if quota.get("last_update") else "jamais"
+
+    if remaining is None:
+        send_message(
+            "📡 <b>Quotas API</b>\n\n"
+            "⚠️ Pas encore de données — lancez /run pour initialiser.\n\n"
+            "<b>The Odds API</b> : plan gratuit = 500 req/mois\n"
+            "<b>Football-Data.org</b> : plan gratuit = 10 req/min"
+        )
+        return
+
+    total = 500
+    pct   = round(remaining / total * 100)
+    bar_filled = round(pct / 10)
+    bar = "█" * bar_filled + "░" * (10 - bar_filled)
+
+    color_hint = "🟢" if pct > 40 else "🟡" if pct > 15 else "🔴"
+
+    send_message(
+        f"📡 <b>Quotas API</b>\n\n"
+        f"<b>The Odds API</b> (500/mois)\n"
+        f"{color_hint} {bar} {pct}%\n"
+        f"  ✅ Utilisées : <b>{used}</b>\n"
+        f"  💚 Restantes : <b>{remaining}</b>\n"
+        f"  📅 Mis à jour : {updated}\n\n"
+        f"<b>Football-Data.org</b>\n"
+        f"  ⏱ Rate limit : 10 req/min (auto-géré)\n"
+        f"  🔄 Retry automatique sur 429"
+    )
+
+
 COMMANDS = {
     "/help":     handle_help,
     "/status":   handle_status,
@@ -614,6 +675,8 @@ COMMANDS = {
     "/results":  handle_results,
     "/reset":    handle_reset,
     "/today":   handle_today,
+    "/api":     handle_api,
+    "/api":     handle_api,
     "/web":      handle_web,
 }
 

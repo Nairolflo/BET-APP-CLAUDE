@@ -8,59 +8,94 @@
     </div>
 
     {% if bets %}
-    <!-- Sections par marché -->
     {% set home_bets = bets | selectattr("market", "equalto", "Home Win") | list %}
     {% set away_bets = bets | selectattr("market", "equalto", "Away Win") | list %}
+    {% set ha_bets   = home_bets + away_bets %}
     {% set over_bets = bets | rejectattr("market", "equalto", "Home Win") | rejectattr("market", "equalto", "Away Win") | list %}
     {% set bn_bets   = bets | selectattr("bete_noire") | list %}
 
     <div class="tabs">
         <div class="tab active" data-group="live" data-target="all">🎯 Tous ({{ bets|length }})</div>
-        {% if home_bets %}<div class="tab" data-group="live" data-target="home">🏠 Domicile ({{ home_bets|length }})</div>{% endif %}
-        {% if away_bets %}<div class="tab" data-group="live" data-target="away">✈️ Extérieur ({{ away_bets|length }})</div>{% endif %}
-        {% if over_bets %}<div class="tab" data-group="live" data-target="over">⚽ Over/Under ({{ over_bets|length }})</div>{% endif %}
-        {% if bn_bets   %}<div class="tab" data-group="live" data-target="bn">🔥 Bête Noire ({{ bn_bets|length }})</div>{% endif %}
+        <div class="tab" data-group="live" data-target="homeaway">🏠✈️ Home/Away ({{ ha_bets|length }})</div>
+        <div class="tab" data-group="live" data-target="over">⚽ Over/Under ({{ over_bets|length }})</div>
+        {% if bn_bets %}<div class="tab" data-group="live" data-target="bn">🔥 Bête Noire ({{ bn_bets|length }})</div>{% endif %}
     </div>
 
-    {% for tab_id, tab_bets in [('all', bets), ('home', home_bets), ('away', away_bets), ('over', over_bets), ('bn', bn_bets)] %}
-    {% if tab_bets %}
-    <div class="tab-content {% if tab_id == 'all' %}active{% endif %}" data-group="live" data-id="{{ tab_id }}">
-        <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(320px,1fr));gap:1rem">
-        {% for b in tab_bets %}
-        <div class="card" style="border-left:3px solid {% if b.bete_noire %}#ff6b6b{% elif b.market == 'Home Win' %}var(--accent2){% elif b.market == 'Away Win' %}var(--accent){% else %}var(--yellow){% endif %}">
-            <div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:.6rem">
-                <span class="badge badge-league">{{ b.league }}</span>
-                <div style="display:flex;gap:.4rem">
-                    <span class="badge badge-market">{{ b.market }}</span>
-                    {% if b.bete_noire %}<span class="badge badge-bn">🔥 H2H</span>{% endif %}
-                </div>
+    {% macro bet_card(b) %}
+    <div class="card" style="border-left:3px solid {% if b.bete_noire %}#ff6b6b{% elif b.market == 'Home Win' %}var(--accent2){% elif b.market == 'Away Win' %}var(--accent){% else %}var(--yellow){% endif %}">
+        <div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:.5rem">
+            <span class="badge badge-league">{{ b.league }}</span>
+            <div style="display:flex;gap:.3rem;flex-wrap:wrap;justify-content:flex-end">
+                <span class="badge badge-market">{{ b.market }}</span>
+                {% if b.bete_noire %}<span class="badge badge-bn">🔥 H2H {{ "%.0f"|format((b.bete_noire_rate or 0)*100) }}%</span>{% endif %}
             </div>
-            <div style="font-size:1rem;font-weight:700;margin-bottom:.3rem">
-                {{ b.home_team }} vs {{ b.away_team }}
-            </div>
-            <div style="display:flex;gap:1.5rem;margin-top:.8rem;font-size:.85rem">
-                <div>
-                    <div style="color:var(--text-dim);font-size:.72rem">COTE</div>
-                    <div style="font-size:1.4rem;font-weight:800;color:var(--accent2)">{{ b.bk_odds }}</div>
-                </div>
-                <div>
-                    <div style="color:var(--text-dim);font-size:.72rem">PROBA</div>
-                    <div style="font-size:1.1rem;font-weight:700">{{ "%.0f"|format((b.probability or 0) * 100) }}%</div>
-                </div>
-                <div>
-                    <div style="color:var(--text-dim);font-size:.72rem">VALUE</div>
-                    <div class="{% if (b.value or 0) >= 0.10 %}c-high{% elif (b.value or 0) >= 0.05 %}c-mid{% else %}c-low{% endif %}" style="font-size:1.1rem;font-weight:700">
-                        +{{ "%.1f"|format((b.value or 0) * 100) }}%
-                    </div>
-                </div>
-            </div>
-            <div style="margin-top:.8rem;font-size:.78rem;color:var(--text-dim)">{{ b.bookmaker }}</div>
         </div>
-        {% endfor %}
+        <div style="font-size:.95rem;font-weight:700;margin-bottom:.6rem">{{ b.home_team }} vs {{ b.away_team }}</div>
+        <div style="display:flex;gap:1.2rem;font-size:.85rem">
+            <div>
+                <div style="color:var(--text-dim);font-size:.7rem">COTE</div>
+                <div style="font-size:1.4rem;font-weight:800;color:var(--accent2)">{{ b.bk_odds }}</div>
+            </div>
+            <div>
+                <div style="color:var(--text-dim);font-size:.7rem">PROBA</div>
+                <div style="font-size:1.1rem;font-weight:700">{{ "%.0f"|format((b.probability or 0)*100) }}%</div>
+            </div>
+            <div>
+                <div style="color:var(--text-dim);font-size:.7rem">VALUE</div>
+                <div class="{% if (b.value or 0) >= 0.10 %}c-high{% elif (b.value or 0) >= 0.05 %}c-mid{% else %}c-low{% endif %}" style="font-size:1.1rem;font-weight:700">
+                    +{{ "%.1f"|format((b.value or 0)*100) }}%
+                </div>
+            </div>
         </div>
+        <div style="margin-top:.6rem;font-size:.75rem;color:var(--text-dim)">{{ b.bookmaker }}</div>
+    </div>
+    {% endmacro %}
+
+    {% macro bet_grid(bet_list) %}
+    <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(300px,1fr));gap:1rem">
+        {% for b in bet_list %}{{ bet_card(b) }}{% endfor %}
+    </div>
+    {% endmacro %}
+
+    <!-- Tous -->
+    <div class="tab-content active" data-group="live" data-id="all">
+        {{ bet_grid(bets) }}
+    </div>
+
+    <!-- Home / Away -->
+    <div class="tab-content" data-group="live" data-id="homeaway">
+        {% if ha_bets %}
+        {% if home_bets %}
+        <h3 style="margin-bottom:.8rem;color:var(--accent2)">🏠 Domicile ({{ home_bets|length }})</h3>
+        {{ bet_grid(home_bets) }}
+        {% endif %}
+        {% if away_bets %}
+        <h3 style="margin:1.5rem 0 .8rem;color:var(--accent)">✈️ Extérieur ({{ away_bets|length }})</h3>
+        {{ bet_grid(away_bets) }}
+        {% endif %}
+        {% else %}
+        <div class="card empty">Aucun pari Home/Away aujourd'hui.</div>
+        {% endif %}
+    </div>
+
+    <!-- Over / Under -->
+    <div class="tab-content" data-group="live" data-id="over">
+        {% if over_bets %}
+        {{ bet_grid(over_bets) }}
+        {% else %}
+        <div class="card empty">Aucun pari Over/Under aujourd'hui.</div>
+        {% endif %}
+    </div>
+
+    <!-- Bête Noire -->
+    {% if bn_bets %}
+    <div class="tab-content" data-group="live" data-id="bn">
+        <div class="card mb2" style="border-left:3px solid #ff6b6b;padding:.8rem 1.2rem;font-size:.85rem;color:var(--text-dim)">
+            🔥 Ces paris bénéficient d'un bonus de probabilité basé sur la domination historique H2H sur 3 saisons.
+        </div>
+        {{ bet_grid(bn_bets) }}
     </div>
     {% endif %}
-    {% endfor %}
 
     {% else %}
     <div class="card empty">

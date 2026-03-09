@@ -6,11 +6,13 @@ from flask import Flask, render_template, jsonify
 from dotenv import load_dotenv
 load_dotenv()
 
+from api_clients import get_odds_api_usage
 from database import (
     init_db, get_unique_bets, get_stats,
     get_stats_by_market, get_stats_by_league_detailed,
     get_bete_noire_bets, get_roi_over_time, get_streak,
 )
+from api_clients import get_odds_api_usage
 
 app = Flask(__name__)
 
@@ -44,8 +46,22 @@ def stats_page():
     roi_time   = get_roi_over_time()
     streak     = get_streak()
     # Best market
-    resolved = [m for m in by_market if (m.get("total",0) - m.get("pending",0)) >= 3]
+    resolved    = [m for m in by_market if (m.get("total",0) - m.get("pending",0)) >= 3]
     best_market = max(resolved, key=lambda x: x.get("roi", -999)) if resolved else None
+    # Bête noire stats
+    bn_bets = get_bete_noire_bets(limit=500)
+    bn_wins    = sum(1 for b in bn_bets if b.get("success") == 1)
+    bn_losses  = sum(1 for b in bn_bets if b.get("success") == 0)
+    bn_pending = sum(1 for b in bn_bets if b.get("success") == -1)
+    bn_settled = max(bn_wins + bn_losses, 1)
+    bn_stats = {
+        "total":    len(bn_bets),
+        "wins":     bn_wins,
+        "losses":   bn_losses,
+        "pending":  bn_pending,
+        "win_rate": round(bn_wins / bn_settled * 100, 1),
+        "roi":      round((bn_wins - bn_losses) / bn_settled * 100, 1),
+    }
     return render_template(
         "stats.html",
         stats=stats,
@@ -54,22 +70,10 @@ def stats_page():
         roi_time=roi_time,
         streak=streak,
         best_market=best_market,
+        bn_stats=bn_stats,
     )
 
-@app.route("/bete-noire")
-def bete_noire_page():
-    bets      = get_bete_noire_bets(limit=200)
-    # Stats spécifiques bête noire
-    total     = len(bets)
-    wins      = sum(1 for b in bets if b.get("success") == 1)
-    losses    = sum(1 for b in bets if b.get("success") == 0)
-    pending   = sum(1 for b in bets if b.get("success") == -1)
-    settled   = max(wins + losses, 1)
-    win_rate  = round(wins / settled * 100, 1)
-    roi       = round((wins - losses) / settled * 100, 1)
-    bn_stats  = {"total": total, "wins": wins, "losses": losses,
-                 "pending": pending, "win_rate": win_rate, "roi": roi}
-    return render_template("bete_noire.html", bets=bets, bn_stats=bn_stats)
+# bete_noire page merged into /stats
 
 @app.route("/live")
 def live():
@@ -108,7 +112,8 @@ def config_page():
             {"id": 179, "name": "Scottish Premiership", "flag": "🏴󠁧󠁢󠁳󠁣󠁴󠁿", "h2h": False, "form": False},
         ],
     }
-    return render_template("config.html", config=config)
+    quota = get_odds_api_usage()
+    return render_template("config.html", config=config, quota=quota)
 
 # ─────────────────────────────────────────────
 # API JSON
@@ -140,6 +145,13 @@ def api_live():
     today = datetime.utcnow().date().isoformat()
     bets  = get_unique_bets(limit=500)
     return jsonify([b for b in bets if b.get("match_date") == today])
+
+@app.route("/api/quota")
+def api_quota():
+    return jsonify(get_odds_api_usage())
+
+
+
 
 if __name__ == "__main__":
     init_db()
