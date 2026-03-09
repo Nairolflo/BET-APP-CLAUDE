@@ -19,14 +19,34 @@ FD_MIN_INTERVAL = 6.5  # secondes minimum entre chaque appel FD
 # ── Tracker tokens Odds API ──────────────────
 _odds_tokens = {"remaining": None, "used": None, "last_update": None}
 
+# Seuil de sécurité : bloque les runs auto si restantes < ODDS_SAFE_THRESHOLD
+ODDS_SAFE_THRESHOLD = 30  # garder 30 req en réserve pour runs manuels
+
+# Cache des cotes : évite de re-fetcher si < ODDS_CACHE_TTL secondes
+_odds_cache   = {}   # {league_id: {"events": [...], "ts": float}}
+ODDS_CACHE_TTL = 6 * 3600  # 6 heures
+
+
 def get_odds_quota() -> dict:
     """Retourne les tokens Odds API restants depuis le cache."""
     return dict(_odds_tokens)
 
+
+def odds_quota_ok(required: int = 1) -> bool:
+    """
+    Retourne True si on a assez de quota pour faire `required` appels.
+    Si remaining est inconnu (premier run), on laisse passer.
+    """
+    rem = _odds_tokens.get("remaining")
+    if rem is None:
+        return True  # inconnu = on tente
+    return rem >= ODDS_SAFE_THRESHOLD + required
+
+
 def _update_odds_quota(headers: dict):
     """Met à jour le cache depuis les headers de réponse Odds API."""
     try:
-        rem = headers.get("x-requests-remaining")
+        rem  = headers.get("x-requests-remaining")
         used = headers.get("x-requests-used")
         if rem is not None:
             _odds_tokens["remaining"] = int(rem)
@@ -36,6 +56,12 @@ def _update_odds_quota(headers: dict):
         _odds_tokens["last_update"] = datetime.now(timezone.utc).isoformat()
     except Exception:
         pass
+
+
+def clear_odds_cache():
+    """Vide le cache des cotes (appelé au début de chaque run forcé)."""
+    global _odds_cache
+    _odds_cache = {}
 
 def _fd_rate_limit():
     """Attend si nécessaire pour respecter la limite 10 req/min."""
@@ -277,10 +303,30 @@ def get_fixtures(league_id: int, season: int, days_ahead: int = 10) -> list:
 # ODDS — The Odds API
 # ─────────────────────────────────────────────
 
-def get_odds(league_id: int) -> list:
+def get_odds(league_id: int, force: bool = False) -> list:
+    """
+    Retourne les cotes pour une ligue.
+    - Cache 6h en mémoire pour éviter les appels redondants intra-journée.
+    - Vérifie le quota avant d'appeler (bloque si < ODDS_SAFE_THRESHOLD).
+    - force=True : ignore le cache (utilisé par /run manuel).
+    """
     sport_key = LEAGUE_SPORT_MAP.get(league_id)
     if not sport_key:
         return []
+
+    # Cache mémoire 6h
+    if not force and league_id in _odds_cache:
+        cached = _odds_cache[league_id]
+        age = time.time() - cached["ts"]
+        if age < ODDS_CACHE_TTL:
+            print(f"[get_odds] League {league_id}: {len(cached['events'])} events depuis cache ({age/3600:.1f}h)")
+            return cached["events"]
+
+    # Vérif quota avant l'appel
+    if not odds_quota_ok(required=1):
+        rem = _odds_tokens.get("remaining", "?")
+        print(f"[get_odds] QUOTA INSUFFISANT ({rem} restantes < seuil {ODDS_SAFE_THRESHOLD}) — appel annulé")
+        return _odds_cache.get(league_id, {}).get("events", [])  # retourne le cache même expiré
 
     url = f"{ODDS_API_BASE}/sports/{sport_key}/odds"
     params = {
@@ -294,9 +340,10 @@ def get_odds(league_id: int) -> list:
         resp.raise_for_status()
         _update_odds_quota(resp.headers)
         events = resp.json()
+        _odds_cache[league_id] = {"events": events, "ts": time.time()}
     except Exception as e:
         print(f"[get_odds] Erreur league {league_id}: {e}")
-        return []
+        return _odds_cache.get(league_id, {}).get("events", [])  # fallback cache expiré
 
     results = []
     for event in events:
