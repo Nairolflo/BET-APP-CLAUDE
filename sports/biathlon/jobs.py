@@ -180,7 +180,7 @@ def run(silent=False):
 
     try:
         from sports.biathlon.biathlon_client import get_upcoming_races, get_cup_standings, RACE_FORMATS
-        from biathlon.biathlon_model  import predict_h2h
+        from sports.biathlon.biathlon_model import predict_h2h
 
         races = get_upcoming_races(days_ahead=BIATHLON_DAYS_AHEAD)
         if not races:
