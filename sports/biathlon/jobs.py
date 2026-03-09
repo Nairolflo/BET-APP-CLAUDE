@@ -21,16 +21,47 @@ state = {
 
 def _get_top_athletes(gender: str, fmt_code: str) -> list:
     """
-    Récupère les top athlètes depuis les résultats des dernières courses.
-    Source : dernières courses officielles du même format et genre (API IBU).
-    Fallback : toutes courses récentes du genre si pas assez de données.
+    Récupère les top athlètes depuis les résultats des N dernières courses officielles
+    du même format et genre. Source fiable : API IBU /Results.
+    Champs retournés : ibu_id, name, nat, rank.
     """
     try:
         from sports.biathlon.biathlon_client import (
-            get_competitions, get_results, CURRENT_SEASON, PREV_SEASON
+            get_recent_race_ids, get_results, CURRENT_SEASON, PREV_SEASON
         )
-    except ImportError:
+    except ImportError as e:
+        log.error(f"[Biathlon] import error: {e}")
         return []
+
+    seen = {}
+    for season in [CURRENT_SEASON, PREV_SEASON]:
+        race_ids = get_recent_race_ids(gender=gender, fmt_code=fmt_code, season=season, n=5)
+        log.info(f"[Biathlon] {len(race_ids)} courses récentes {fmt_code}/{gender} saison {season}")
+
+        for race_id in race_ids:
+            try:
+                results = get_results(race_id)
+                log.info(f"[Biathlon] {race_id}: {len(results)} résultats")
+                if results and isinstance(results[0], dict):
+                    log.info(f"[Biathlon] résultats[0] keys: {list(results[0].keys())}")
+
+                for r in results[:15]:
+                    # L'API retourne IBUId (pas IBU_ID)
+                    ibu_id = r.get("IBUId") or r.get("IBU_ID") or r.get("Id") or ""
+                    name   = r.get("Name") or r.get("ShortName") or ""
+                    nat    = r.get("Nat") or r.get("Nation") or ""
+                    rank   = int(r.get("Rank") or 999)
+                    if ibu_id and name and ibu_id not in seen:
+                        seen[ibu_id] = {"ibu_id": ibu_id, "name": name, "nat": nat, "rank": rank}
+            except Exception as e:
+                log.warning(f"[Biathlon] get_results {race_id}: {e}")
+
+        if len(seen) >= 6:
+            break
+
+    athletes = sorted(seen.values(), key=lambda x: x["rank"])[:12]
+    log.info(f"[Biathlon] {len(athletes)} athlètes trouvés pour {fmt_code}/{gender}")
+    return athletes
 
     def fetch_athletes_from_races(races, limit=8):
         seen = {}
