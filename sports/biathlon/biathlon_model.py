@@ -350,7 +350,7 @@ def predict_podium(race_id: str, race_format: str) -> list:
 
     athletes_data = []
     for r in results:
-        ibu_id = r.get("IBU_ID", "")
+        ibu_id = r.get("IBUId", r.get("IBU_ID", ""))
         name   = r.get("Name", "")
         nat    = r.get("Nat", "")
         if not ibu_id:

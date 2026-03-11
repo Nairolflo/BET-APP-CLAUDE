@@ -39,6 +39,12 @@ RACE_FORMATS = {
     "RL": "Relais",
     "MX": "Relais Mixte",
     "SR": "Single Mixed Relay",
+    # Aliases IBU réels
+    "SPRINT":    "Sprint",
+    "PURSUIT":   "Poursuite",
+    "INDIV":     "Individuelle",
+    "MASSSTART": "Mass Start",
+    "RELAY":     "Relais",
 }
 
 # Level 1 = BMW IBU World Cup
@@ -161,11 +167,12 @@ def get_upcoming_races(days_ahead: int = 10) -> list:
                 race_id  = r.get("RaceId", "")
                 desc     = r.get("ShortDescription", r.get("Description", ""))
                 start_r  = r.get("StartTime", "")
-                fmt_code = r.get("RaceTypeId", r.get("RaceType", "SP"))
-                status   = r.get("Status", "")
+                fmt_code = r.get("DisciplineId", "SP")
+                cat_id   = r.get("catId", "")
+                status   = r.get("ScheduleStatus", "")
 
-                # Ignorer les courses déjà officielles
-                if status == "Official":
+                # Ignorer les courses déjà finies
+                if status == "FINISHED":
                     continue
 
                 if not race_id:
@@ -178,13 +185,13 @@ def get_upcoming_races(days_ahead: int = 10) -> list:
                 except Exception:
                     race_date = start_date
 
-                # Détection genre depuis le RaceId et la description
-                is_women = (
-                    "Women" in desc
-                    or "SW" in race_id.split("SWRLCP")[-1][:3] if "SWRLCP" in race_id else False
-                    or desc.startswith("W")
-                )
-                gender = "W" if is_women else "M"
+                # Genre via catId : SM=hommes, SW=femmes, MX=mixte
+                if cat_id == "SW":
+                    gender = "W"
+                elif cat_id == "SM":
+                    gender = "M"
+                else:
+                    gender = "W" if "Women" in desc else "M"
 
                 upcoming.append({
                     "race_id":     race_id,
@@ -225,18 +232,19 @@ def get_recent_race_ids(gender: str = "M", fmt_code: str = "SP",
         for r in races:
             race_id  = r.get("RaceId", "")
             desc     = r.get("ShortDescription", r.get("Description", ""))
-            fmt      = r.get("RaceTypeId", r.get("RaceType", r.get("Disc", r.get("Type", ""))))
-            status   = r.get("Status", "")
+            fmt      = r.get("DisciplineId", "")          # vrai champ IBU
+            status   = r.get("ScheduleStatus", "")        # "FINISHED" = officiel
+            cat_id   = r.get("catId", "")                 # "SM"=hommes "SW"=femmes "MX"=mixte
             all_fmt_seen.add(fmt)
 
-            if status != "Official":
+            if status != "FINISHED":
                 continue
             if fmt != fmt_code:
                 continue
 
-            is_women = "Women" in desc or ("SWRLCP" in race_id and "SW" in race_id.split("SWRLCP")[-1][:3])
-            r_gender = "W" if is_women else "M"
-            if r_gender != gender:
+            # Genre via catId : SM=hommes, SW=femmes, MX=mixte
+            r_gender = "W" if cat_id == "SW" else ("M" if cat_id == "SM" else "X")
+            if r_gender != gender and r_gender != "X":
                 continue
 
             race_ids.append((r.get("StartTime",""), race_id))
