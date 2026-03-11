@@ -212,15 +212,20 @@ def get_recent_race_ids(gender: str = "M", fmt_code: str = "SP",
     events = get_events(season)
     race_ids = []
     all_fmt_seen = set()
+    _logged_comp = False
     for event in events:
         event_id = event.get("EventId", "")
         if not event_id:
             continue
         races = get_competitions(event_id)
+        if not _logged_comp and races and isinstance(races[0], dict):
+            log.info(f"[IBU] Competitions[0] keys: {list(races[0].keys())}")
+            log.info(f"[IBU] Competitions[0]: {races[0]}")
+            _logged_comp = True
         for r in races:
             race_id  = r.get("RaceId", "")
             desc     = r.get("ShortDescription", r.get("Description", ""))
-            fmt      = r.get("RaceTypeId", r.get("RaceType", r.get("Disc", "")))
+            fmt      = r.get("RaceTypeId", r.get("RaceType", r.get("Disc", r.get("Type", ""))))
             status   = r.get("Status", "")
             all_fmt_seen.add(fmt)
 
