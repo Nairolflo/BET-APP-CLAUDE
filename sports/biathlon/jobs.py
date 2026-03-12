@@ -1,7 +1,7 @@
 """
-sports/biathlon/jobs.py — Jobs biathlon
-Modèle basé sur stats IBU réelles : ranking, tirs, temps ski.
-Pas d'endpoint AthResults → features calculées depuis résultats de courses récentes.
+sports/biathlon/jobs.py
+Prédictions H2H biathlon : modèle IBU + cotes Pinnacle guest.
+Message Telegram : uniquement les H2H avec cote + probabilité modèle.
 """
 import os
 import math
@@ -12,10 +12,8 @@ from datetime import datetime, timezone
 log = logging.getLogger(__name__)
 
 BIATHLON_DAYS_AHEAD = int(os.getenv("BIATHLON_DAYS_AHEAD", 5))
-ANALYSIS_HOUR       = int(os.getenv("BIATHLON_ANALYSIS_HOUR", 7))
-RESULTS_HOUR        = int(os.getenv("BIATHLON_RESULTS_HOUR", 22))
-N_RECENT_RACES      = int(os.getenv("BIATHLON_RECENT_RACES", 8))   # courses pour les stats
-N_SIMULATIONS       = 200_000
+N_RECENT_RACES      = int(os.getenv("BIATHLON_RECENT_RACES", 8))
+VALUE_THRESHOLD     = float(os.getenv("VALUE_THRESHOLD", 0.02))
 
 state = {
     "last_run":     None,
@@ -45,7 +43,7 @@ def init_db():
                     pick         TEXT,
                     opponent     TEXT,
                     odd          REAL DEFAULT 0,
-                    bookmaker    TEXT DEFAULT 'IBU Model',
+                    bookmaker    TEXT DEFAULT 'Pinnacle',
                     prob_model   REAL,
                     prob_implied REAL DEFAULT 0,
                     value_pct    REAL DEFAULT 0,
@@ -67,7 +65,7 @@ def init_db():
                     pick         TEXT,
                     opponent     TEXT,
                     odd          REAL DEFAULT 0,
-                    bookmaker    TEXT DEFAULT 'IBU Model',
+                    bookmaker    TEXT DEFAULT 'Pinnacle',
                     prob_model   REAL,
                     prob_implied REAL DEFAULT 0,
                     value_pct    REAL DEFAULT 0,
@@ -92,37 +90,34 @@ def save_bet(bet: dict) -> int:
             SELECT id FROM biathlon_bets
             WHERE race_id = {p} AND bet_type = {p} AND pick = {p}
         """, (bet.get("race_id"), bet.get("bet_type"), bet.get("pick")))
-        existing = cur.fetchone()
-        if existing:
-            return existing[0]
+        if cur.fetchone():
+            return -1
         if is_postgres():
             cur.execute("""
                 INSERT INTO biathlon_bets
-                    (race_id, race_name, race_date, race_format, bet_type,
-                     pick, opponent, odd, bookmaker, prob_model,
-                     prob_implied, value_pct, kelly)
+                    (race_id,race_name,race_date,race_format,bet_type,
+                     pick,opponent,odd,bookmaker,prob_model,prob_implied,value_pct,kelly)
                 VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s) RETURNING id
             """, (
                 bet.get("race_id"), bet.get("race_name"), bet.get("race_date"),
                 bet.get("race_format"), bet.get("bet_type"), bet.get("pick"),
-                bet.get("opponent"), bet.get("odd", 0), bet.get("bookmaker", "IBU Model"),
-                bet.get("prob_model"), bet.get("prob_implied", 0),
-                bet.get("value_pct", 0), bet.get("kelly", 0),
+                bet.get("opponent",""), bet.get("odd",0), bet.get("bookmaker","Pinnacle"),
+                bet.get("prob_model",0), bet.get("prob_implied",0),
+                bet.get("value_pct",0), bet.get("kelly",0),
             ))
             return cur.fetchone()[0]
         else:
             cur.execute("""
                 INSERT INTO biathlon_bets
-                    (race_id, race_name, race_date, race_format, bet_type,
-                     pick, opponent, odd, bookmaker, prob_model,
-                     prob_implied, value_pct, kelly)
+                    (race_id,race_name,race_date,race_format,bet_type,
+                     pick,opponent,odd,bookmaker,prob_model,prob_implied,value_pct,kelly)
                 VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)
             """, (
                 bet.get("race_id"), bet.get("race_name"), bet.get("race_date"),
                 bet.get("race_format"), bet.get("bet_type"), bet.get("pick"),
-                bet.get("opponent"), bet.get("odd", 0), bet.get("bookmaker", "IBU Model"),
-                bet.get("prob_model"), bet.get("prob_implied", 0),
-                bet.get("value_pct", 0), bet.get("kelly", 0),
+                bet.get("opponent",""), bet.get("odd",0), bet.get("bookmaker","Pinnacle"),
+                bet.get("prob_model",0), bet.get("prob_implied",0),
+                bet.get("value_pct",0), bet.get("kelly",0),
             ))
             return cur.lastrowid
     finally:
@@ -135,7 +130,7 @@ def get_pending_bets() -> list:
     conn = get_connection()
     try:
         cur = conn.cursor()
-        cur.execute("SELECT * FROM biathlon_bets WHERE result = -1 ORDER BY race_date ASC")
+        cur.execute("SELECT * FROM biathlon_bets WHERE result = -1 ORDER BY race_date")
         return rows_to_dicts(cur, cur.fetchall())
     finally:
         conn.close()
@@ -148,214 +143,156 @@ def update_result(bet_id: int, result: int):
         cur = conn.cursor()
         p   = ph()
         ts  = "NOW()" if is_postgres() else "CURRENT_TIMESTAMP"
-        cur.execute(f"""
-            UPDATE biathlon_bets SET result = {p}, resolved_at = {ts} WHERE id = {p}
-        """, (result, bet_id))
+        cur.execute(
+            f"UPDATE biathlon_bets SET result={p}, resolved_at={ts} WHERE id={p}",
+            (result, bet_id)
+        )
         conn.commit()
     finally:
         conn.close()
 
 
 # ─────────────────────────────────────────────
-# MODÈLE — Features depuis résultats de courses
+# STATS IBU depuis courses récentes
 # ─────────────────────────────────────────────
 
 def _parse_shooting(s: str) -> dict:
-    """Parse '10110 10101' → accuracy globale, couché, debout."""
-    if not s:
-        return {"acc": None, "prone": None, "standing": None, "misses": None}
-    digits = [int(c) for c in s.replace(" ", "").replace("/", "") if c in "01"]
+    digits = [int(c) for c in s.replace(" ", "") if c in "01"] if s else []
     if not digits:
-        return {"acc": None, "prone": None, "standing": None, "misses": None}
-    total = len(digits)
-    hits  = sum(digits)
-    half  = total // 2
-    prone    = sum(digits[:half]) / half if half else None
-    standing = sum(digits[half:]) / (total - half) if (total - half) > 0 else None
+        return {"acc": None, "prone": None, "standing": None}
+    half = len(digits) // 2
     return {
-        "acc":      hits / total,
-        "prone":    prone,
-        "standing": standing,
-        "misses":   total - hits,
+        "acc":      sum(digits) / len(digits),
+        "prone":    sum(digits[:half]) / half if half else None,
+        "standing": sum(digits[half:]) / (len(digits)-half) if (len(digits)-half) > 0 else None,
     }
 
 
-def _time_to_sec(t: str) -> float | None:
-    """'00:23:45.2' → secondes."""
+def _time_to_sec(t: str):
     if not t:
         return None
     try:
         t = t.lstrip("+").strip()
         parts = t.split(":")
         if len(parts) == 3:
-            return int(parts[0]) * 3600 + int(parts[1]) * 60 + float(parts[2])
+            return int(parts[0])*3600 + int(parts[1])*60 + float(parts[2])
         elif len(parts) == 2:
-            return int(parts[0]) * 60 + float(parts[1])
+            return int(parts[0])*60 + float(parts[1])
     except Exception:
         return None
 
 
-def build_athlete_stats(athletes_ids: list, race_ids: list) -> dict:
-    """
-    Construit les stats de chaque athlète depuis les résultats des courses récentes.
-    Retourne {ibu_id: {name, nat, avg_rank, shoot_acc, prone_acc, standing_acc,
-                       avg_misses, n_races, top3_rate, win_rate}}
-    """
+def build_athlete_stats(race_ids: list) -> dict:
+    """Stats par athlète depuis les résultats des courses récentes."""
     from sports.biathlon.biathlon_client import get_results
-
-    # Accumuler résultats par athlète
-    data = {}  # ibu_id → liste de résultats
-
+    data = {}
     for race_id in race_ids:
         try:
-            results = get_results(race_id)
-            n_finishers = len([r for r in results if r.get("Rank")])
+            results  = get_results(race_id)
+            n_finish = len([r for r in results if r.get("Rank")])
             for r in results:
                 ibu_id = r.get("IBUId", "")
-                if not ibu_id or r.get("IRM"):  # IRM = disqualifié/abandon
-                    continue
-                rank = r.get("Rank")
-                if not rank:
+                if not ibu_id or r.get("IRM") or not r.get("Rank"):
                     continue
                 shoot = _parse_shooting(r.get("Shootings", ""))
-                run_t = _time_to_sec(r.get("RunTime", ""))
-                tot_t = _time_to_sec(r.get("TotalTime", ""))
-
                 if ibu_id not in data:
-                    data[ibu_id] = {
-                        "name":    r.get("Name", ""),
-                        "nat":     r.get("Nat", ""),
-                        "results": [],
-                    }
-                data[ibu_id]["results"].append({
-                    "rank":       int(rank),
-                    "n_fin":      n_finishers,
-                    "shoot_acc":  shoot["acc"],
-                    "prone_acc":  shoot["prone"],
-                    "standing_acc": shoot["standing"],
-                    "misses":     shoot["misses"],
-                    "run_time":   run_t,
-                    "tot_time":   tot_t,
+                    data[ibu_id] = {"name": r.get("Name",""), "nat": r.get("Nat",""), "res": []}
+                data[ibu_id]["res"].append({
+                    "rank":     int(r["Rank"]),
+                    "n_fin":    n_finish,
+                    "prone":    shoot["prone"],
+                    "standing": shoot["standing"],
+                    "acc":      shoot["acc"],
+                    "run_sec":  _time_to_sec(r.get("RunTime","")),
                 })
         except Exception as e:
-            log.warning(f"[Biathlon] build_stats {race_id}: {e}")
+            log.warning(f"[Biathlon] stats {race_id}: {e}")
 
-    # Calculer features agrégées
     stats = {}
     for ibu_id, d in data.items():
-        res = d["results"]
+        res = d["res"]
         if not res:
             continue
-        n = len(res)
+        n      = len(res)
+        ranks  = [r["rank"] for r in res]
+        n_fins = [r["n_fin"] for r in res]
+        prones    = [r["prone"]    for r in res if r["prone"]    is not None]
+        standings = [r["standing"] for r in res if r["standing"] is not None]
+        runs      = [r["run_sec"]  for r in res if r["run_sec"]  is not None]
 
-        ranks      = [r["rank"] for r in res]
-        n_fins     = [r["n_fin"] for r in res]
-        # Rank relatif (0=premier, 1=dernier)
-        rel_ranks  = [rk / max(nf, 1) for rk, nf in zip(ranks, n_fins)]
-
-        accs     = [r["shoot_acc"] for r in res if r["shoot_acc"] is not None]
-        prones   = [r["prone_acc"] for r in res if r["prone_acc"] is not None]
-        standings= [r["standing_acc"] for r in res if r["standing_acc"] is not None]
-        misses   = [r["misses"] for r in res if r["misses"] is not None]
-        runs     = [r["run_time"] for r in res if r["run_time"] is not None]
-
+        rel_ranks = [rk/max(nf,1) for rk,nf in zip(ranks,n_fins)]
         stats[ibu_id] = {
             "name":         d["name"],
             "nat":          d["nat"],
             "n_races":      n,
-            "avg_rank":     sum(ranks) / n,
-            "avg_rel_rank": sum(rel_ranks) / n,
-            "top3_rate":    sum(1 for rk in ranks if rk <= 3) / n,
-            "win_rate":     sum(1 for rk in ranks if rk == 1) / n,
-            "top10_rate":   sum(1 for rk in ranks if rk <= 10) / n,
-            "shoot_acc":    sum(accs) / len(accs) if accs else 0.82,
-            "prone_acc":    sum(prones) / len(prones) if prones else 0.82,
-            "standing_acc": sum(standings) / len(standings) if standings else 0.78,
-            "avg_misses":   sum(misses) / len(misses) if misses else 2.0,
-            "avg_run_time": sum(runs) / len(runs) if runs else None,
+            "avg_rank":     sum(ranks)/n,
+            "avg_rel_rank": sum(rel_ranks)/n,
+            "top3_rate":    sum(1 for rk in ranks if rk<=3)/n,
+            "win_rate":     sum(1 for rk in ranks if rk==1)/n,
+            "prone_acc":    sum(prones)/len(prones)       if prones    else 0.82,
+            "standing_acc": sum(standings)/len(standings) if standings else 0.78,
+            "avg_run_sec":  sum(runs)/len(runs)           if runs      else None,
         }
-
     return stats
 
 
-def calc_rating(s: dict, fmt_code: str) -> float:
-    """
-    Score composite 0-1 depuis les stats d'un athlète.
-    Pondérations par format (sprint = ski 45%, tirs 40%, forme 15%).
-    """
-    weights = {
-        "SP": {"ski": 0.45, "shoot": 0.40, "form": 0.15},
-        "PU": {"ski": 0.50, "shoot": 0.35, "form": 0.15},
-        "IN": {"ski": 0.38, "shoot": 0.47, "form": 0.15},
-        "MS": {"ski": 0.55, "shoot": 0.30, "form": 0.15},
-        "RL": {"ski": 0.50, "shoot": 0.38, "form": 0.12},
-    }
-    w = weights.get(fmt_code, weights["SP"])
-
-    # Score ski : rank relatif inversé (0.0 = dernier, 1.0 = premier)
-    ski_score  = max(0, 1.0 - s.get("avg_rel_rank", 0.5))
-    # Score tir : accuracy pondérée (couché + debout)
-    shoot_score = (s.get("prone_acc", 0.82) * 0.5 + s.get("standing_acc", 0.78) * 0.5)
-    # Score forme : top3 rate
+def calc_rating(s: dict, fmt: str) -> float:
+    """Score composite 0-1 depuis stats IBU."""
+    w = {
+        "SP": (0.45, 0.40, 0.15),
+        "PU": (0.50, 0.35, 0.15),
+        "IN": (0.38, 0.47, 0.15),
+        "MS": (0.55, 0.30, 0.15),
+    }.get(fmt, (0.45, 0.40, 0.15))
+    ski_score   = max(0, 1.0 - s.get("avg_rel_rank", 0.5))
+    shoot_score = s.get("prone_acc", 0.82)*0.5 + s.get("standing_acc", 0.78)*0.5
     form_score  = s.get("top3_rate", 0.1)
-
-    return (w["ski"] * ski_score + w["shoot"] * shoot_score + w["form"] * form_score)
-
-
-def simulate_podium(athletes: list, fmt_code: str, n_sim: int = N_SIMULATIONS) -> list:
-    """
-    Monte Carlo : simule N fois la course, retourne liste triée par P(Top3).
-    athletes : [{ibu_id, name, nat, rating}]
-    """
-    sigma = {"SP": 0.12, "PU": 0.10, "IN": 0.14, "MS": 0.11, "RL": 0.09}.get(fmt_code, 0.12)
-    counts = {a["ibu_id"]: {"win": 0, "top3": 0} for a in athletes}
-    ratings = [a["rating"] for a in athletes]
-    ids     = [a["ibu_id"] for a in athletes]
-
-    batch = 1000
-    for _ in range(n_sim // batch):
-        for _ in range(batch):
-            scores = [r + random.gauss(0, sigma) for r in ratings]
-            ranked = sorted(zip(scores, ids), reverse=True)
-            counts[ranked[0][1]]["win"] += 1
-            for i in range(min(3, len(ranked))):
-                counts[ranked[i][1]]["top3"] += 1
-
-    total = (n_sim // batch) * batch
-    result = []
-    for a in athletes:
-        aid = a["ibu_id"]
-        result.append({
-            "ibu_id":  aid,
-            "name":    a["name"],
-            "nat":     a.get("nat", ""),
-            "rating":  round(a["rating"], 4),
-            "p_win":   round(counts[aid]["win"]  / total, 4),
-            "p_top3":  round(counts[aid]["top3"] / total, 4),
-        })
-    return sorted(result, key=lambda x: -x["p_top3"])
+    return w[0]*ski_score + w[1]*shoot_score + w[2]*form_score
 
 
-def h2h_prob(rating_a: float, rating_b: float) -> float:
-    """P(A bat B) via logistique calibrée."""
-    delta = rating_a - rating_b
-    return 1 / (1 + math.exp(-15 * delta))
+def h2h_prob(ra: float, rb: float) -> float:
+    return 1 / (1 + math.exp(-15 * (ra - rb)))
 
 
 # ─────────────────────────────────────────────
-# RÉCUPÉRATION ATHLÈTES
+# MATCHING noms IBU ↔ Pinnacle
 # ─────────────────────────────────────────────
 
-def get_recent_race_ids_for(gender: str, fmt_code: str, n: int = N_RECENT_RACES) -> list:
-    from sports.biathlon.biathlon_client import (
-        get_recent_race_ids, CURRENT_SEASON, PREV_SEASON
-    )
-    ids = get_recent_race_ids(gender=gender, fmt_code=fmt_code,
-                               season=CURRENT_SEASON, n=n)
-    if len(ids) < 3:
-        ids += get_recent_race_ids(gender=gender, fmt_code=fmt_code,
-                                    season=PREV_SEASON, n=n - len(ids))
-    return ids[:n]
+def _normalize(name: str) -> str:
+    """Normalise un nom pour la comparaison : minuscules, sans accents."""
+    import unicodedata
+    name = unicodedata.normalize("NFD", name.lower())
+    return "".join(c for c in name if unicodedata.category(c) != "Mn")
+
+
+def match_pinnacle_to_ibu(pin_name: str, stats: dict) -> tuple[str, str] | None:
+    """
+    Cherche l'IBU id correspondant au nom Pinnacle.
+    Pinnacle = "Boe J." ou "Boe Johannes" ou "Johannes Boe"
+    IBU = "Johannes Thingnes Boe" ou "BOE Johannes Thingnes"
+    Retourne (ibu_id, ibu_name) ou None.
+    """
+    pin_norm  = _normalize(pin_name)
+    pin_parts = set(pin_norm.split())
+
+    best_id, best_name, best_score = None, None, 0
+    for ibu_id, s in stats.items():
+        ibu_norm  = _normalize(s["name"])
+        ibu_parts = set(ibu_norm.split())
+        common    = pin_parts & ibu_parts
+        score     = len(common)
+        # Bonus si le nom de famille correspond (token le plus long)
+        if score > 0:
+            pin_long = max(pin_parts, key=len)
+            ibu_long = max(ibu_parts, key=len)
+            if pin_long == ibu_long or pin_long in ibu_norm or ibu_long in pin_norm:
+                score += 2
+        if score > best_score:
+            best_score = score
+            best_id    = ibu_id
+            best_name  = s["name"]
+
+    return (best_id, best_name) if best_score >= 1 else None
 
 
 # ─────────────────────────────────────────────
@@ -371,171 +308,151 @@ def run(silent=False):
         return
 
     state["running"] = True
-    log.info("[Biathlon] Analyse démarrée")
+    log.info("[Biathlon] Analyse H2H démarrée")
 
     try:
+        from sports.biathlon.pinnacle_client import get_h2h_odds
         from sports.biathlon.biathlon_client import (
-            get_upcoming_races, RACE_FORMATS, preload_competitions,
-            CURRENT_SEASON, PREV_SEASON
+            get_upcoming_races, RACE_FORMATS,
+            preload_competitions, CURRENT_SEASON, PREV_SEASON,
+            get_recent_race_ids,
         )
 
-        # ── Précharger TOUTES les compétitions une seule fois ──
-        log.info("[Biathlon] Préchargement compétitions...")
+        # ── 1. Cotes H2H Pinnacle ──
+        log.info("[Biathlon] Récupération cotes Pinnacle...")
+        h2h_pinnacle = get_h2h_odds()
+        log.info(f"[Biathlon] {len(h2h_pinnacle)} H2H Pinnacle disponibles")
+
+        # ── 2. Courses à venir ──
         preload_competitions(CURRENT_SEASON)
         preload_competitions(PREV_SEASON)
-        log.info("[Biathlon] Préchargement terminé")
-
         races = get_upcoming_races(days_ahead=BIATHLON_DAYS_AHEAD)
-        if not races:
+
+        if not races and not h2h_pinnacle:
             if not silent:
-                send_message("🎿 <b>Biathlon</b> : Aucune course dans les prochains jours.")
+                send_message("🎿 <b>Biathlon</b> : Aucune course ni cote disponible.")
             state["running"] = False
             return
 
-        msg = "🎿 <b>Prédictions Biathlon</b>\n\n"
+        # ── 3. Stats IBU (une seule fois pour toutes les courses) ──
+        # Prendre les 8 derniers sprints H+F pour avoir les stats générales
+        all_race_ids = []
+        for gender in ["M", "W"]:
+            for fmt in ["SP", "PU", "IN"]:
+                ids = get_recent_race_ids(gender=gender, fmt_code=fmt,
+                                          season=CURRENT_SEASON, n=4)
+                all_race_ids.extend(ids)
+        all_race_ids = list(dict.fromkeys(all_race_ids))  # dédoublonner
+        log.info(f"[Biathlon] Calcul stats sur {len(all_race_ids)} courses récentes")
+        ibu_stats = build_athlete_stats(all_race_ids)
+        log.info(f"[Biathlon] Stats calculées pour {len(ibu_stats)} athlètes")
 
-        for race in races[:4]:
-            race_id     = race.get("race_id", "")
-            description = race.get("description", "Course")
-            race_date   = race.get("date", "")
-            fmt_code    = race.get("format", "SP")
-            fmt_name    = race.get("format_name") or RACE_FORMATS.get(fmt_code, fmt_code)
-            location    = race.get("location", "")
-            gender      = race.get("gender", "M")
-            gender_icon = "♀️" if gender == "W" else "♂️"
+        # ── 4. Message : H2H Pinnacle enrichis avec modèle IBU ──
+        msg = "🎿 <b>Biathlon — H2H Pinnacle</b>\n\n"
 
-            msg += f"{gender_icon} <b>{description}</b>\n"
-            msg += f"📅 {race_date}"
-            if location:
-                msg += f" · {location}"
-            if fmt_name:
-                msg += f" · {fmt_name}"
-            msg += "\n"
+        if h2h_pinnacle:
+            value_found = False
+            for h2h in h2h_pinnacle:
+                odd_a = h2h["odd_a"]
+                odd_b = h2h["odd_b"]
 
-            # Récupérer stats depuis courses récentes
-            race_ids = get_recent_race_ids_for(gender, fmt_code)
-            if not race_ids:
-                msg += "<i>Pas de courses récentes disponibles</i>\n\n"
-                continue
+                # Probabilité implicite (avec marge bookmaker)
+                prob_imp_a = 1 / odd_a
+                prob_imp_b = 1 / odd_b
 
-            athlete_stats = build_athlete_stats([], race_ids)
-            if len(athlete_stats) < 4:
-                msg += "<i>Données insuffisantes</i>\n\n"
-                continue
+                # Chercher les stats IBU pour chaque athlète
+                match_a = match_pinnacle_to_ibu(h2h["athlete_a"], ibu_stats)
+                match_b = match_pinnacle_to_ibu(h2h["athlete_b"], ibu_stats)
 
-            # Trier par avg_rank et prendre top 15
-            top = sorted(athlete_stats.values(), key=lambda x: x["avg_rank"])[:15]
+                if match_a and match_b:
+                    sa = ibu_stats[match_a[0]]
+                    sb = ibu_stats[match_b[0]]
+                    fmt = "SP"  # format par défaut pour le rating
+                    ra  = calc_rating(sa, fmt)
+                    rb  = calc_rating(sb, fmt)
+                    prob_model_a = h2h_prob(ra, rb)
+                    prob_model_b = 1 - prob_model_a
 
-            # Calculer rating pour chaque athlète
-            athletes_rated = []
-            for s in top:
-                # Trouver ibu_id
-                ibu_id = next((k for k, v in athlete_stats.items()
-                               if v["name"] == s["name"]), "")
-                if not ibu_id:
-                    continue
-                rating = calc_rating(s, fmt_code)
-                athletes_rated.append({
-                    "ibu_id": ibu_id,
-                    "name":   s["name"],
-                    "nat":    s["nat"],
-                    "rating": rating,
-                    "stats":  s,
-                })
+                    value_a = (prob_model_a * odd_a) - 1
+                    value_b = (prob_model_b * odd_b) - 1
 
-            if len(athletes_rated) < 3:
-                msg += "<i>Pas assez d'athlètes</i>\n\n"
-                continue
+                    # Afficher uniquement si value bet ou toujours ?
+                    # On affiche tout mais on met ✅ sur les values
+                    fav_idx  = "a" if prob_model_a >= prob_model_b else "b"
+                    fav_name = h2h["athlete_a"] if fav_idx == "a" else h2h["athlete_b"]
+                    fav_prob = prob_model_a if fav_idx == "a" else prob_model_b
+                    fav_odd  = odd_a if fav_idx == "a" else odd_b
+                    fav_val  = value_a if fav_idx == "a" else value_b
+                    und_name = h2h["athlete_b"] if fav_idx == "a" else h2h["athlete_a"]
+                    und_prob = prob_model_b if fav_idx == "a" else prob_model_a
+                    und_odd  = odd_b if fav_idx == "a" else odd_a
+                    und_val  = value_b if fav_idx == "a" else value_a
 
-            # ── Podium Monte Carlo ──
-            podium = simulate_podium(athletes_rated, fmt_code, n_sim=100_000)
+                    is_value = fav_val > VALUE_THRESHOLD
+                    value_icon = "✅" if is_value else "•"
+                    if is_value:
+                        value_found = True
 
-            msg += "\n🏆 <b>Podium prédit</b>\n"
-            medals = ["🥇", "🥈", "🥉"]
-            for i, a in enumerate(podium[:8]):
-                s     = athlete_stats.get(a["ibu_id"], {})
-                shoot = s.get("shoot_acc", 0)
-                misses = s.get("avg_misses", "?")
-                medal = medals[i] if i < 3 else f"  {i+1}."
-                msg += (
-                    f"{medal} <b>{a['name']}</b> {a['nat']} "
-                    f"— Top3: <b>{round(a['p_top3']*100)}%</b> "
-                    f"· Vict: {round(a['p_win']*100)}% "
-                    f"· 🎯{round(shoot*100)}% ({misses:.1f} ratés)\n"
-                )
+                    shoot_a = sa.get("prone_acc",0)*50 + sa.get("standing_acc",0)*50
+                    shoot_b = sb.get("prone_acc",0)*50 + sb.get("standing_acc",0)*50
 
-                if i < 3:
+                    msg += (
+                        f"{value_icon} <b>{fav_name}</b> {sa.get('nat','')} "
+                        f"<b>{round(fav_prob*100)}%</b> @ <b>{fav_odd}</b>\n"
+                        f"   vs {und_name} {sb.get('nat','')} "
+                        f"{round(und_prob*100)}% @ {und_odd}\n"
+                        f"   🎯 {round(shoot_a)}% vs {round(shoot_b)}%"
+                        f" · {sa.get('n_races',0)} vs {sb.get('n_races',0)} courses\n"
+                    )
+                    if is_value:
+                        msg += f"   📈 Edge: +{round(fav_val*100, 1)}%\n"
+                    msg += "\n"
+
                     save_bet({
-                        "race_id":     race_id,
-                        "race_name":   description,
-                        "race_date":   race_date,
-                        "race_format": fmt_code,
-                        "bet_type":    "TOP3",
-                        "pick":        a["name"],
-                        "opponent":    "",
-                        "prob_model":  a["p_top3"],
+                        "race_id":      str(h2h["matchup_id"]),
+                        "race_name":    h2h["league"],
+                        "race_date":    h2h["start_time"][:10] if h2h.get("start_time") else "",
+                        "race_format":  "H2H",
+                        "bet_type":     "H2H",
+                        "pick":         fav_name,
+                        "opponent":     und_name,
+                        "odd":          fav_odd,
+                        "bookmaker":    "Pinnacle",
+                        "prob_model":   round(fav_prob, 4),
+                        "prob_implied": round(1/fav_odd, 4),
+                        "value_pct":    round(fav_val*100, 2),
                     })
 
-            # ── Marchés bookmakers réels ──
-            # Vainqueur : paris disponibles sur Winamax/Betclic
-            msg += "\n🎰 <b>Paris disponibles</b>\n"
-            msg += "<i>Marchés biathlon : Vainqueur · Top 3</i>\n\n"
+                else:
+                    # Pas de stats IBU — afficher juste les cotes Pinnacle
+                    msg += (
+                        f"• <b>{h2h['athlete_a']}</b> @ {odd_a}"
+                        f" vs <b>{h2h['athlete_b']}</b> @ {odd_b}\n"
+                        f"  <i>(pas de stats IBU)</i>\n\n"
+                    )
 
-            msg += "🏅 <b>Vainqueur prédit</b>\n"
-            for a in podium[:5]:
-                s = athlete_stats.get(a["ibu_id"], {})
-                # Cote juste (fair odd) = 1 / p_win
-                fair_odd = round(1 / a["p_win"], 2) if a["p_win"] > 0.01 else 99.0
-                shoot = s.get("shoot_acc", 0)
-                misses = s.get("avg_misses", "?")
-                msg += (
-                    f"  {'⭐' if a['p_win'] > 0.20 else '•'} "
-                    f"<b>{a['name']}</b> {a['nat']} "
-                    f"→ {round(a['p_win']*100)}% "
-                    f"(cote juste ~{fair_odd}) "
-                    f"🎯{round(shoot*100)}%/{misses:.1f}r\n"
-                )
-                save_bet({
-                    "race_id":     race_id,
-                    "race_name":   description,
-                    "race_date":   race_date,
-                    "race_format": fmt_code,
-                    "bet_type":    "WIN",
-                    "pick":        a["name"],
-                    "opponent":    "",
-                    "prob_model":  a["p_win"],
-                })
+            if not value_found:
+                msg += "💡 <i>Aucun value bet détecté — cotes Pinnacle alignées avec le modèle</i>\n"
 
-            msg += "\n📊 <b>Top 3 (chaque athlète)</b>\n"
-            for a in podium[:6]:
-                s = athlete_stats.get(a["ibu_id"], {})
-                fair_top3 = round(1 / a["p_top3"], 2) if a["p_top3"] > 0.01 else 99.0
-                n = s.get("n_races", 0)
-                msg += (
-                    f"  • <b>{a['name']}</b> {a['nat']} "
-                    f"→ {round(a['p_top3']*100)}% "
-                    f"(cote juste ~{fair_top3}) "
-                    f"sur {n} courses\n"
-                )
+        else:
+            # Pas de cotes Pinnacle — mode prédictions IBU seules
+            msg += "⚠️ <i>Pas de H2H Pinnacle disponibles actuellement</i>\n"
+            msg += "<i>Courses à venir :</i>\n"
+            for race in races[:5]:
+                msg += f"  • {race.get('description','')} — {race.get('date','')}\n"
 
-            msg += (
-                "\n💡 <i>Compare ces cotes justes avec Winamax/Betclic "
-                "→ si bookmaker cote plus haut = value bet ✅</i>\n"
-            )
-
-            msg += "\n💡 <i>Stats sur les {} derniers sprints</i>\n\n".format(len(race_ids))
+        msg += "\n🏦 <i>Cotes Pinnacle — référence de marché</i>"
 
         state["last_run"] = datetime.now(timezone.utc)
-        state["running"]  = False
-
         if not silent:
             send_message(msg)
 
     except Exception as e:
-        state["running"] = False
         log.error(f"[Biathlon] run error: {e}", exc_info=True)
         if not silent:
-            send_message(f"❌ <b>Erreur analyse biathlon</b> : {e}")
+            send_message(f"❌ <b>Erreur biathlon</b> : {e}")
+    finally:
+        state["running"] = False
 
 
 # ─────────────────────────────────────────────
@@ -544,6 +461,7 @@ def run(silent=False):
 
 def check_results(silent=False):
     from core.telegram import send_message
+    from sports.biathlon.biathlon_client import get_results
 
     pending = get_pending_bets()
     if not pending:
@@ -551,40 +469,25 @@ def check_results(silent=False):
             send_message("🎿 Aucun bet biathlon en attente.")
         return
 
-    from sports.biathlon.biathlon_client import get_results
-
     won, lost = [], []
     for bet in pending:
         try:
             results = get_results(bet["race_id"])
             if not results:
                 continue
-
-            if bet["bet_type"] == "H2H":
-                pick_rank = next((int(r["Rank"]) for r in results
-                                  if bet["pick"].lower() in r.get("Name","").lower()
-                                  and r.get("Rank")), None)
-                opp_rank  = next((int(r["Rank"]) for r in results
-                                  if bet.get("opponent","").lower() in r.get("Name","").lower()
-                                  and r.get("Rank")), None)
-                if pick_rank is None or opp_rank is None:
-                    continue
-                success = 1 if pick_rank < opp_rank else 0
-
-            elif bet["bet_type"] == "TOP3":
-                pick_rank = next((int(r["Rank"]) for r in results
-                                  if bet["pick"].lower() in r.get("Name","").lower()
-                                  and r.get("Rank")), None)
-                if pick_rank is None:
-                    continue
-                success = 1 if pick_rank <= 3 else 0
-            else:
+            pick_rank = next((int(r["Rank"]) for r in results
+                              if bet["pick"].lower() in r.get("Name","").lower()
+                              and r.get("Rank")), None)
+            opp_rank  = next((int(r["Rank"]) for r in results
+                              if bet.get("opponent","").lower() in r.get("Name","").lower()
+                              and r.get("Rank")), None)
+            if pick_rank is None or opp_rank is None:
                 continue
-
+            success = 1 if pick_rank < opp_rank else 0
             update_result(bet["id"], success)
-            (won if success == 1 else lost).append(bet)
+            (won if success else lost).append(bet)
         except Exception as e:
-            log.warning(f"[Biathlon] check_result bet {bet['id']}: {e}")
+            log.warning(f"[Biathlon] check_result {bet['id']}: {e}")
 
     state["last_results"] = datetime.now(timezone.utc)
 
@@ -597,13 +500,11 @@ def check_results(silent=False):
     if won:
         msg += f"✅ <b>Gagnés ({len(won)})</b>\n"
         for b in won:
-            t = "H2H" if b["bet_type"] == "H2H" else "Top3"
-            msg += f"  • {b['pick']} [{t}] · {b['race_name']}\n"
+            msg += f"  • {b['pick']} vs {b['opponent']} — {b['race_name']}\n"
     if lost:
         msg += f"\n❌ <b>Perdus ({len(lost)})</b>\n"
         for b in lost:
-            t = "H2H" if b["bet_type"] == "H2H" else "Top3"
-            msg += f"  • {b['pick']} [{t}] · {b['race_name']}\n"
+            msg += f"  • {b['pick']} vs {b['opponent']} — {b['race_name']}\n"
 
     if not silent:
         send_message(msg)
