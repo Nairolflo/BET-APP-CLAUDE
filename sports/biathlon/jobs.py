@@ -1,6 +1,6 @@
 """
 sports/biathlon/jobs.py
-Prédictions H2H biathlon : modèle IBU + cotes Pinnacle guest.
+Prédictions H2H biathlon : modèle IBU + cotes historiques OddsPortal.
 Message Telegram : uniquement les H2H avec cote + probabilité modèle.
 """
 import os
@@ -43,7 +43,7 @@ def init_db():
                     pick         TEXT,
                     opponent     TEXT,
                     odd          REAL DEFAULT 0,
-                    bookmaker    TEXT DEFAULT 'Pinnacle',
+                    bookmaker    TEXT DEFAULT 'Winamax',
                     prob_model   REAL,
                     prob_implied REAL DEFAULT 0,
                     value_pct    REAL DEFAULT 0,
@@ -65,7 +65,7 @@ def init_db():
                     pick         TEXT,
                     opponent     TEXT,
                     odd          REAL DEFAULT 0,
-                    bookmaker    TEXT DEFAULT 'Pinnacle',
+                    bookmaker    TEXT DEFAULT 'Winamax',
                     prob_model   REAL,
                     prob_implied REAL DEFAULT 0,
                     value_pct    REAL DEFAULT 0,
@@ -101,7 +101,7 @@ def save_bet(bet: dict) -> int:
             """, (
                 bet.get("race_id"), bet.get("race_name"), bet.get("race_date"),
                 bet.get("race_format"), bet.get("bet_type"), bet.get("pick"),
-                bet.get("opponent",""), bet.get("odd",0), bet.get("bookmaker","Pinnacle"),
+                bet.get("opponent",""), bet.get("odd",0), bet.get("bookmaker","Winamax"),
                 bet.get("prob_model",0), bet.get("prob_implied",0),
                 bet.get("value_pct",0), bet.get("kelly",0),
             ))
@@ -115,7 +115,7 @@ def save_bet(bet: dict) -> int:
             """, (
                 bet.get("race_id"), bet.get("race_name"), bet.get("race_date"),
                 bet.get("race_format"), bet.get("bet_type"), bet.get("pick"),
-                bet.get("opponent",""), bet.get("odd",0), bet.get("bookmaker","Pinnacle"),
+                bet.get("opponent",""), bet.get("odd",0), bet.get("bookmaker","Winamax"),
                 bet.get("prob_model",0), bet.get("prob_implied",0),
                 bet.get("value_pct",0), bet.get("kelly",0),
             ))
@@ -311,24 +311,29 @@ def run(silent=False):
     log.info("[Biathlon] Analyse H2H démarrée")
 
     try:
-        from sports.biathlon.pinnacle_client import get_h2h_odds
+        # OddsPortal importé plus haut
         from sports.biathlon.biathlon_client import (
             get_upcoming_races, RACE_FORMATS,
             preload_competitions, CURRENT_SEASON, PREV_SEASON,
             get_recent_race_ids,
         )
 
-        # ── 1. Cotes H2H Pinnacle ──
-        log.info("[Biathlon] Récupération cotes Pinnacle...")
-        h2h_pinnacle = get_h2h_odds()
-        log.info(f"[Biathlon] {len(h2h_pinnacle)} H2H Pinnacle disponibles")
+        # ── 1. Cotes H2H historiques OddsPortal (Winamax/Betclic) ──
+        log.info("[Biathlon] Récupération cotes OddsPortal...")
+        from sports.biathlon.oddsportal_client import (
+            get_biathlon_h2h_history, get_avg_h2h_odds
+        )
+        h2h_history  = get_biathlon_h2h_history(n_last=5)
+        h2h_avg_odds = get_avg_h2h_odds(n_last=5)
+        log.info(f"[Biathlon] {len(h2h_history)} courses historiques, "
+                 f"{len(h2h_avg_odds)} paires H2H avec cotes")
 
         # ── 2. Courses à venir ──
         preload_competitions(CURRENT_SEASON)
         preload_competitions(PREV_SEASON)
         races = get_upcoming_races(days_ahead=BIATHLON_DAYS_AHEAD)
 
-        if not races and not h2h_pinnacle:
+        if not races and not h2h_avg_odds:
             if not silent:
                 send_message("🎿 <b>Biathlon</b> : Aucune course ni cote disponible.")
             state["running"] = False
@@ -348,100 +353,127 @@ def run(silent=False):
         log.info(f"[Biathlon] Stats calculées pour {len(ibu_stats)} athlètes")
 
         # ── 4. Message : H2H Pinnacle enrichis avec modèle IBU ──
-        msg = "🎿 <b>Biathlon — H2H Pinnacle</b>\n\n"
+        msg = "🎿 <b>Biathlon — H2H Prédictions</b>\n\n"
 
-        if h2h_pinnacle:
-            value_found = False
-            for h2h in h2h_pinnacle:
-                odd_a = h2h["odd_a"]
-                odd_b = h2h["odd_b"]
+        # ── 4. Message : H2H avec cotes OddsPortal + modèle IBU ──
+        # Construire les H2H depuis les courses IBU à venir + cotes historiques
+        h2h_to_show = []
 
-                # Probabilité implicite (avec marge bookmaker)
-                prob_imp_a = 1 / odd_a
-                prob_imp_b = 1 / odd_b
+        # Générer H2H depuis le top des athlètes par stats
+        top_athletes = sorted(ibu_stats.items(),
+                              key=lambda x: x[1].get("avg_rank", 99))[:12]
 
-                # Chercher les stats IBU pour chaque athlète
-                match_a = match_pinnacle_to_ibu(h2h["athlete_a"], ibu_stats)
-                match_b = match_pinnacle_to_ibu(h2h["athlete_b"], ibu_stats)
+        for i in range(min(5, len(top_athletes)-1)):
+            ibu_id_a, sa = top_athletes[i]
+            ibu_id_b, sb = top_athletes[i+1]
 
-                if match_a and match_b:
-                    sa = ibu_stats[match_a[0]]
-                    sb = ibu_stats[match_b[0]]
-                    fmt = "SP"  # format par défaut pour le rating
-                    ra  = calc_rating(sa, fmt)
-                    rb  = calc_rating(sb, fmt)
-                    prob_model_a = h2h_prob(ra, rb)
-                    prob_model_b = 1 - prob_model_a
+            ra = calc_rating(sa, "SP")
+            rb = calc_rating(sb, "SP")
+            prob_a = h2h_prob(ra, rb)
+            prob_b = 1 - prob_a
 
-                    value_a = (prob_model_a * odd_a) - 1
-                    value_b = (prob_model_b * odd_b) - 1
+            # Chercher cotes historiques OddsPortal pour cette paire
+            from sports.biathlon.oddsportal_client import _normalize
+            key_sorted = tuple(sorted([sa["name"], sb["name"]]))
+            hist = h2h_avg_odds.get(key_sorted)
 
-                    # Afficher uniquement si value bet ou toujours ?
-                    # On affiche tout mais on met ✅ sur les values
-                    fav_idx  = "a" if prob_model_a >= prob_model_b else "b"
-                    fav_name = h2h["athlete_a"] if fav_idx == "a" else h2h["athlete_b"]
-                    fav_prob = prob_model_a if fav_idx == "a" else prob_model_b
-                    fav_odd  = odd_a if fav_idx == "a" else odd_b
-                    fav_val  = value_a if fav_idx == "a" else value_b
-                    und_name = h2h["athlete_b"] if fav_idx == "a" else h2h["athlete_a"]
-                    und_prob = prob_model_b if fav_idx == "a" else prob_model_a
-                    und_odd  = odd_b if fav_idx == "a" else odd_a
-                    und_val  = value_b if fav_idx == "a" else value_a
+            # Cote juste calculée
+            fair_a = round(1/prob_a, 2) if prob_a > 0.01 else 99.0
+            fair_b = round(1/prob_b, 2) if prob_b > 0.01 else 99.0
 
-                    is_value = fav_val > VALUE_THRESHOLD
-                    value_icon = "✅" if is_value else "•"
-                    if is_value:
-                        value_found = True
+            h2h_to_show.append({
+                "name_a":      sa["name"],
+                "name_b":      sb["name"],
+                "nat_a":       sa.get("nat",""),
+                "nat_b":       sb.get("nat",""),
+                "prob_a":      prob_a,
+                "prob_b":      prob_b,
+                "fair_a":      fair_a,
+                "fair_b":      fair_b,
+                "hist_odd_a":  hist["avg_odd_a"] if hist else None,
+                "hist_odd_b":  hist["avg_odd_b"] if hist else None,
+                "bookmaker":   hist["bookmaker"] if hist else None,
+                "n_samples":   hist["n_samples"] if hist else 0,
+                "shoot_a":     sa.get("prone_acc",0)*50 + sa.get("standing_acc",0)*50,
+                "shoot_b":     sb.get("prone_acc",0)*50 + sb.get("standing_acc",0)*50,
+                "n_races_a":   sa.get("n_races",0),
+                "n_races_b":   sb.get("n_races",0),
+            })
 
-                    shoot_a = sa.get("prone_acc",0)*50 + sa.get("standing_acc",0)*50
-                    shoot_b = sb.get("prone_acc",0)*50 + sb.get("standing_acc",0)*50
+        # ── 4. Message final — H2H avec cotes historiques et modèle ──
+        upcoming_names = ", ".join(r.get("description","") for r in races[:3]) if races else "—"
+        msg += f"📅 <i>Prochaines courses : {upcoming_names}</i>\n\n"
+        msg += "⚔️ <b>H2H — Prédictions modèle</b>\n\n"
 
-                    msg += (
-                        f"{value_icon} <b>{fav_name}</b> {sa.get('nat','')} "
-                        f"<b>{round(fav_prob*100)}%</b> @ <b>{fav_odd}</b>\n"
-                        f"   vs {und_name} {sb.get('nat','')} "
-                        f"{round(und_prob*100)}% @ {und_odd}\n"
-                        f"   🎯 {round(shoot_a)}% vs {round(shoot_b)}%"
-                        f" · {sa.get('n_races',0)} vs {sb.get('n_races',0)} courses\n"
-                    )
-                    if is_value:
-                        msg += f"   📈 Edge: +{round(fav_val*100, 1)}%\n"
-                    msg += "\n"
+        value_found = False
+        for h2h in h2h_to_show:
+            prob_a = h2h["prob_a"]
+            prob_b = h2h["prob_b"]
+            fav_is_a = prob_a >= prob_b
 
-                    save_bet({
-                        "race_id":      str(h2h["matchup_id"]),
-                        "race_name":    h2h["league"],
-                        "race_date":    h2h["start_time"][:10] if h2h.get("start_time") else "",
-                        "race_format":  "H2H",
-                        "bet_type":     "H2H",
-                        "pick":         fav_name,
-                        "opponent":     und_name,
-                        "odd":          fav_odd,
-                        "bookmaker":    "Pinnacle",
-                        "prob_model":   round(fav_prob, 4),
-                        "prob_implied": round(1/fav_odd, 4),
-                        "value_pct":    round(fav_val*100, 2),
-                    })
+            fav_name  = h2h["name_a"] if fav_is_a else h2h["name_b"]
+            fav_nat   = h2h["nat_a"]  if fav_is_a else h2h["nat_b"]
+            fav_prob  = prob_a if fav_is_a else prob_b
+            fav_fair  = h2h["fair_a"] if fav_is_a else h2h["fair_b"]
+            fav_hist  = h2h["hist_odd_a"] if fav_is_a else h2h["hist_odd_b"]
+            fav_shoot = h2h["shoot_a"] if fav_is_a else h2h["shoot_b"]
 
-                else:
-                    # Pas de stats IBU — afficher juste les cotes Pinnacle
-                    msg += (
-                        f"• <b>{h2h['athlete_a']}</b> @ {odd_a}"
-                        f" vs <b>{h2h['athlete_b']}</b> @ {odd_b}\n"
-                        f"  <i>(pas de stats IBU)</i>\n\n"
-                    )
+            und_name  = h2h["name_b"] if fav_is_a else h2h["name_a"]
+            und_nat   = h2h["nat_b"]  if fav_is_a else h2h["nat_a"]
+            und_prob  = prob_b if fav_is_a else prob_a
+            und_fair  = h2h["fair_b"] if fav_is_a else h2h["fair_a"]
+            und_hist  = h2h["hist_odd_b"] if fav_is_a else h2h["hist_odd_a"]
+            und_shoot = h2h["shoot_b"] if fav_is_a else h2h["shoot_a"]
 
-            if not value_found:
-                msg += "💡 <i>Aucun value bet détecté — cotes Pinnacle alignées avec le modèle</i>\n"
+            # Value bet : cote historique bookmaker > cote juste modèle
+            is_value = fav_hist and fav_hist > fav_fair * (1 + VALUE_THRESHOLD)
+            icon = "✅" if is_value else "•"
+            if is_value:
+                value_found = True
 
-        else:
-            # Pas de cotes Pinnacle — mode prédictions IBU seules
-            msg += "⚠️ <i>Pas de H2H Pinnacle disponibles actuellement</i>\n"
-            msg += "<i>Courses à venir :</i>\n"
-            for race in races[:5]:
-                msg += f"  • {race.get('description','')} — {race.get('date','')}\n"
+            # Ligne principale
+            msg += f"{icon} <b>{fav_name}</b> {fav_nat} <b>{round(fav_prob*100)}%</b>"
+            msg += f" — cote juste ~{fav_fair}\n"
+            msg += f"   vs {und_name} {und_nat} {round(und_prob*100)}%"
+            msg += f" — cote juste ~{und_fair}\n"
 
-        msg += "\n🏦 <i>Cotes Pinnacle — référence de marché</i>"
+            # Cotes historiques si disponibles
+            if fav_hist and und_hist:
+                bk = h2h.get("bookmaker","Winamax")
+                n  = h2h.get("n_samples", 0)
+                msg += f"   📊 Hist. {bk}: {fav_hist} vs {und_hist}"
+                msg += f" <i>({n} course{'s' if n>1 else ''})</i>\n"
+                if is_value:
+                    edge = round((fav_hist / fav_fair - 1) * 100, 1)
+                    msg += f"   📈 Edge estimé: +{edge}%\n"
+            else:
+                msg += f"   📊 <i>Pas de cotes historiques disponibles</i>\n"
+
+            # Stats tir
+            msg += (f"   🎯 {round(fav_shoot)}% vs {round(und_shoot)}%"
+                    f" · {h2h['n_races_a']} vs {h2h['n_races_b']} courses\n\n")
+
+            # Sauvegarder en DB
+            race_upcoming = races[0] if races else {}
+            save_bet({
+                "race_id":      race_upcoming.get("race_id", "upcoming"),
+                "race_name":    race_upcoming.get("description", "Prochaine course"),
+                "race_date":    race_upcoming.get("date", ""),
+                "race_format":  race_upcoming.get("format", "SP"),
+                "bet_type":     "H2H",
+                "pick":         fav_name,
+                "opponent":     und_name,
+                "odd":          fav_hist or fav_fair,
+                "bookmaker":    h2h.get("bookmaker", "IBU Model"),
+                "prob_model":   round(fav_prob, 4),
+                "prob_implied": round(1/fav_hist, 4) if fav_hist else 0,
+                "value_pct":    round((fav_hist/fav_fair - 1)*100, 2) if fav_hist else 0,
+            })
+
+        if not value_found:
+            msg += "💡 <i>Aucun value bet détecté ce jour</i>\n"
+
+        msg += "\n📊 <i>Cotes historiques Winamax/Betclic via OddsPortal · Modèle IBU</i>"
 
         state["last_run"] = datetime.now(timezone.utc)
         if not silent:
