@@ -508,3 +508,7 @@ def check_results(silent=False):
 
     if not silent:
         send_message(msg)
+
+# Constantes attendues par le scheduler
+ANALYSIS_HOUR = int(os.getenv("BIATHLON_ANALYSIS_HOUR", 7))
+RESULTS_HOUR  = int(os.getenv("BIATHLON_RESULTS_HOUR", 22))
