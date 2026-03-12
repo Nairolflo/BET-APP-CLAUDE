@@ -23,6 +23,13 @@ def get_odds_quota() -> dict:
     """Retourne les tokens Odds API restants depuis le cache."""
     return dict(_odds_tokens)
 
+def odds_quota_ok(min_remaining: int = 5) -> bool:
+    """Retourne True si on a encore assez de tokens Odds API."""
+    rem = _odds_tokens.get("remaining")
+    if rem is None:
+        return True  # pas encore de données → on tente
+    return int(rem) >= min_remaining
+
 def _update_odds_quota(headers: dict):
     """Met à jour le cache depuis les headers de réponse Odds API."""
     try:
