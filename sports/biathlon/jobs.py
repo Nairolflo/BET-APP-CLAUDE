@@ -109,55 +109,108 @@ def _time_to_sec(t: str):
         return int(p[0])*3600+int(p[1])*60+float(p[2]) if len(p)==3 else int(p[0])*60+float(p[1])
     except: return None
 
-# Formats similaires pour élargir le pool d'athlètes
+# Formats similaires — pour compléter le pool d'athlètes si peu de courses
 SIMILAR_FORMATS = {
-    "SP": [("SP", 1.0), ("PU", 0.7), ("MS", 0.6), ("IN", 0.5)],
-    "PU": [("PU", 1.0), ("SP", 0.7), ("MS", 0.6), ("IN", 0.5)],
-    "MS": [("MS", 1.0), ("PU", 0.7), ("SP", 0.6), ("IN", 0.5)],
-    "IN": [("IN", 1.0), ("SP", 0.6), ("PU", 0.5), ("MS", 0.5)],
+    "SP": [("SP", 1.0), ("PU", 0.6), ("MS", 0.5), ("IN", 0.4)],
+    "PU": [("PU", 1.0), ("SP", 0.6), ("MS", 0.5), ("IN", 0.4)],
+    "MS": [("MS", 1.0), ("PU", 0.6), ("SP", 0.5), ("IN", 0.4)],
+    "IN": [("IN", 1.0), ("SP", 0.5), ("PU", 0.4), ("MS", 0.4)],
 }
+
+def _get_cup_ranking(gender: str) -> dict:
+    """
+    Classement général CdM → {IBUId: {"rank": N, "score": X, "name": ..., "nat": ...}}
+    Normalisé : 1.0 = leader, 0.0 = dernier du top 60.
+    """
+    from sports.biathlon.biathlon_client import get_cup_standings, CURRENT_SEASON
+    try:
+        rows = get_cup_standings(season=CURRENT_SEASON, gender=gender)
+        if not rows:
+            return {}
+        # Trouver les champs dynamiquement
+        sample = rows[0]
+        rank_key  = next((k for k in sample if "Rank"  in k), None)
+        score_key = next((k for k in sample if "Score" in k or "Point" in k), None)
+        ibu_key   = next((k for k in sample if "IBU"   in k or "ibu"   in k), None)
+        name_key  = next((k for k in sample if "Name"  in k), None)
+        nat_key   = next((k for k in sample if "Nat"   in k), None)
+
+        ranked = {}
+        for r in rows:
+            ibu = r.get(ibu_key or "IBUId", "")
+            if not ibu:
+                continue
+            try:
+                rank  = int(r.get(rank_key  or "Rank",  999))
+                score = float(r.get(score_key or "Score", 0))
+            except (ValueError, TypeError):
+                continue
+            ranked[ibu] = {
+                "rank":  rank,
+                "score": score,
+                "name":  r.get(name_key or "Name", ""),
+                "nat":   r.get(nat_key  or "Nat",  ""),
+            }
+
+        if not ranked:
+            return {}
+
+        # Normaliser le score : 1.0 = leader
+        max_score = max(v["score"] for v in ranked.values()) or 1
+        for v in ranked.values():
+            v["norm"] = v["score"] / max_score
+
+        log.info(f"[Biathlon] CdM {gender}: {len(ranked)} athlètes chargés")
+        return ranked
+    except Exception as e:
+        log.warning(f"[Biathlon] CdM ranking KO: {e}")
+        return {}
+
 
 def build_stats_for(gender: str, fmt_code: str, n: int = 8) -> dict:
     """
-    Stats depuis les N dernières courses par format (même genre).
-    - Utilise TOUS les formats individuels pour ne manquer aucun athlète
-    - Pondération format : SP pour SP > PU > MS > IN
-    - Pondération récence exponentielle
-    - Ratio ski : temps_athlète / temps_winner
+    Modèle hybride :
+      40% classement CdM normalisé  (meilleur signal global saison)
+      25% ski_score récent           (ratio temps/winner dernières courses)
+      20% tir récent pondéré récence
+      15% top3_rate pondéré récence
+
+    Sources :
+    - Classement CdM IBU (saison courante)
+    - Résultats des N dernières courses TOUS formats individuels (même genre)
+      pour ne manquer aucun athlète (ex: Laegreid absent de quelques poursuites)
     """
     from sports.biathlon.biathlon_client import get_results, get_recent_race_ids, \
         CURRENT_SEASON, PREV_SEASON
 
-    # Collecte les courses par format avec leur poids
+    # 1. Classement CdM
+    cup = _get_cup_ranking(gender)
+
+    # 2. Courses récentes tous formats (pour compléter le pool)
     fmt_weights = SIMILAR_FORMATS.get(fmt_code, [(fmt_code, 1.0)])
-    all_races = []  # [(race_id, fmt_weight)]
-    for fmt, fmt_w in fmt_weights:
+    all_races = []
+    for fmt, fw in fmt_weights:
         ids = get_recent_race_ids(gender=gender, fmt_code=fmt,
                                    season=CURRENT_SEASON, n=n)
         if len(ids) < 2:
             ids += get_recent_race_ids(gender=gender, fmt_code=fmt,
                                         season=PREV_SEASON, n=n-len(ids))
         for rid in ids[:n]:
-            all_races.append((rid, fmt_w))
+            all_races.append((rid, fw))
 
-    if not all_races:
-        log.warning(f"[Biathlon] Aucune course récente {fmt_code}/{gender}")
-        return {}
-
-    log.info(f"[Biathlon] Stats {fmt_code}/{gender} — {len(all_races)} courses tous formats")
-
-    # Dédupliquer (une course peut apparaître dans plusieurs formats)
-    seen = set()
-    unique_races = []
+    # Dédupliquer en gardant le meilleur poids format
+    seen = {}
     for rid, fw in all_races:
-        if rid not in seen:
-            seen.add(rid)
-            unique_races.append((rid, fw))
+        if rid not in seen or fw > seen[rid]:
+            seen[rid] = fw
+    unique_races = sorted(seen.items(), key=lambda x: -x[1])  # poids format desc
 
-    data = {}
-    # Trier par format_weight desc puis par ordre chronologique
+    log.info(f"[Biathlon] Stats {fmt_code}/{gender} — {len(unique_races)} courses, CdM={len(cup)} athlètes")
+
+    # 3. Collecter résultats par athlète
+    race_data = {}  # ibu → list of result dicts
     for race_idx, (race_id, fmt_w) in enumerate(unique_races):
-        recency_w = (0.85 ** race_idx) * fmt_w  # récence × pertinence format
+        recency_w = (0.85 ** race_idx) * fmt_w
         try:
             results  = get_results(race_id)
             finished = [r for r in results if r.get("Rank") and not r.get("IRM")]
@@ -165,7 +218,6 @@ def build_stats_for(gender: str, fmt_code: str, n: int = 8) -> dict:
             if n_fin < 5:
                 continue
 
-            # Temps du vainqueur
             win_time = None
             for r in finished:
                 if int(r["Rank"]) == 1:
@@ -174,19 +226,24 @@ def build_stats_for(gender: str, fmt_code: str, n: int = 8) -> dict:
 
             for r in finished:
                 ibu  = r.get("IBUId", "")
-                if not ibu: continue
-                sh   = _parse_shooting(r.get("Shootings", ""))
-                rank = int(r["Rank"])
+                if not ibu:
+                    continue
+                sh    = _parse_shooting(r.get("Shootings", ""))
+                rank  = int(r["Rank"])
                 run_t = _time_to_sec(r.get("RunTime", ""))
-                ski_ratio = (win_time / run_t) if (run_t and win_time and run_t > 0) else None
+                ski_r = (win_time / run_t) if (run_t and win_time and run_t > 0) else None
 
-                if ibu not in data:
-                    data[ibu] = {"name": r.get("Name",""), "nat": r.get("Nat",""), "res": []}
-                data[ibu]["res"].append({
+                if ibu not in race_data:
+                    race_data[ibu] = {
+                        "name": r.get("Name",""),
+                        "nat":  r.get("Nat", ""),
+                        "res":  []
+                    }
+                race_data[ibu]["res"].append({
                     "rank":      rank,
                     "n_fin":     n_fin,
                     "rel_rank":  rank / n_fin,
-                    "ski_ratio": ski_ratio,
+                    "ski_ratio": ski_r,
                     "prone":     sh["prone"],
                     "standing":  sh["standing"],
                     "weight":    recency_w,
@@ -194,15 +251,27 @@ def build_stats_for(gender: str, fmt_code: str, n: int = 8) -> dict:
         except Exception as e:
             log.warning(f"[Biathlon] stats {race_id}: {e}")
 
-    stats = {}
-    for ibu, d in data.items():
-        res = d["res"]
-        if not res: continue
-        total_w = sum(r["weight"] for r in res)
+    # 4. Construire stats par athlète
+    # Pool = union(CdM, race_data) pour n'oublier personne
+    all_ibus = set(cup.keys()) | set(race_data.keys())
 
-        avg_rel_rank = sum(r["rel_rank"]  * r["weight"] for r in res) / total_w
-        avg_rank     = sum(r["rank"]      * r["weight"] for r in res) / total_w
-        top3_rate    = sum(r["weight"] for r in res if r["rank"] <= 3) / total_w
+    stats = {}
+    for ibu in all_ibus:
+        res  = race_data.get(ibu, {}).get("res", [])
+        c    = cup.get(ibu, {})
+
+        # Nom / nat : priorité aux résultats de course, fallback CdM
+        name = (race_data.get(ibu, {}).get("name", "") or c.get("name", "")).strip()
+        nat  = (race_data.get(ibu, {}).get("nat",  "") or c.get("nat",  "")).strip()
+        if not name:
+            continue
+
+        total_w = sum(r["weight"] for r in res) if res else 0
+
+        # Stats course
+        avg_rel_rank  = (sum(r["rel_rank"]  * r["weight"] for r in res) / total_w) if res else 0.5
+        avg_rank      = (sum(r["rank"]      * r["weight"] for r in res) / total_w) if res else 50
+        top3_rate     = (sum(r["weight"] for r in res if r["rank"] <= 3) / total_w) if res else 0.0
 
         prones    = [(r["prone"],     r["weight"]) for r in res if r["prone"]     is not None]
         standings = [(r["standing"],  r["weight"]) for r in res if r["standing"]  is not None]
@@ -210,10 +279,14 @@ def build_stats_for(gender: str, fmt_code: str, n: int = 8) -> dict:
 
         prone_acc    = sum(v*w for v,w in prones)    / sum(w for _,w in prones)    if prones    else 0.82
         standing_acc = sum(v*w for v,w in standings) / sum(w for _,w in standings) if standings else 0.78
-        ski_score    = sum(v*w for v,w in ski_rats)  / sum(w for _,w in ski_rats)  if ski_rats  else (1 - avg_rel_rank)
+        ski_score    = sum(v*w for v,w in ski_rats)  / sum(w for _,w in ski_rats)  if ski_rats  else max(0, 1 - avg_rel_rank)
+
+        # Classement CdM normalisé (1.0 = leader, 0.0 = absent/dernier)
+        cdm_norm = c.get("norm", 0.0)
+        cdm_rank = c.get("rank", 999)
 
         stats[ibu] = {
-            "name":         d["name"], "nat": d["nat"],
+            "name":         name, "nat": nat,
             "n_races":      len(res),
             "avg_rank":     round(avg_rank, 2),
             "avg_rel_rank": round(avg_rel_rank, 4),
@@ -221,21 +294,44 @@ def build_stats_for(gender: str, fmt_code: str, n: int = 8) -> dict:
             "prone_acc":    round(prone_acc, 4),
             "standing_acc": round(standing_acc, 4),
             "ski_score":    round(ski_score, 4),
+            "cdm_norm":     round(cdm_norm, 4),
+            "cdm_rank":     cdm_rank,
         }
+
+    log.info(f"[Biathlon] Pool final {fmt_code}/{gender}: {len(stats)} athlètes")
     return stats
 
+
 def calc_rating(s: dict, fmt: str) -> float:
-    """Score composite — ski basé sur ratio temps, tir, forme récente."""
-    w = {
-        "SP": (0.42, 0.40, 0.18),
-        "PU": (0.48, 0.35, 0.17),
-        "IN": (0.35, 0.48, 0.17),
-        "MS": (0.52, 0.30, 0.18),
-    }.get(fmt, (0.44, 0.38, 0.18))
-    ski   = min(s.get("ski_score", 1 - s.get("avg_rel_rank", 0.5)), 1.0)
+    """
+    Score hybride 0-1 :
+      40% CdM normalisé  — meilleur prédicteur global
+      25% ski_score       — vitesse ski récente
+      20% tir             — précision récente
+      15% top3_rate       — forme récente
+
+    Si pas de données CdM → fallback 60% ski + 25% tir + 15% forme.
+    """
+    cdm   = s.get("cdm_norm", 0.0)
+    ski   = min(s.get("ski_score", max(0, 1 - s.get("avg_rel_rank", 0.5))), 1.0)
     shoot = s.get("prone_acc", 0.82) * 0.5 + s.get("standing_acc", 0.78) * 0.5
     form  = s.get("top3_rate", 0.1)
-    return w[0]*ski + w[1]*shoot + w[2]*form
+
+    # Poids tir selon format
+    tir_w = {"IN": 0.25, "SP": 0.20, "PU": 0.20, "MS": 0.18}.get(fmt, 0.20)
+
+    if cdm > 0:
+        # Modèle hybride
+        ski_w  = 0.25
+        form_w = 0.15
+        cdm_w  = 1.0 - ski_w - tir_w - form_w  # = 0.40
+        return cdm_w*cdm + ski_w*ski + tir_w*shoot + form_w*form
+    else:
+        # Fallback sans CdM
+        ski_w  = 0.60
+        form_w = 0.15
+        return ski_w*ski + tir_w*shoot + form_w*form
+
 
 def h2h_prob(ra: float, rb: float) -> float:
     return 1 / (1 + math.exp(-15*(ra-rb)))
