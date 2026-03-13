@@ -109,17 +109,19 @@ def _time_to_sec(t: str):
         return int(p[0])*3600+int(p[1])*60+float(p[2]) if len(p)==3 else int(p[0])*60+float(p[1])
     except: return None
 
-def build_stats_for(gender: str, fmt_code: str, n: int = 6) -> dict:
+def build_stats_for(gender: str, fmt_code: str, n: int = 10) -> dict:
     """
-    Stats athlètes depuis les N dernières courses du BON genre ET format.
-    gender = "M" ou "W", fmt_code = "SP", "PU", "IN", "MS"...
+    Stats depuis les N dernières courses (même genre + format).
+    - Rang relatif (rank/nb_finishers)
+    - Pondération récence exponentielle (course récente pèse plus)
+    - Ratio ski : temps_athlète / temps_winner
     """
     from sports.biathlon.biathlon_client import get_results, get_recent_race_ids, \
         CURRENT_SEASON, PREV_SEASON
 
     race_ids = get_recent_race_ids(gender=gender, fmt_code=fmt_code,
                                     season=CURRENT_SEASON, n=n)
-    if len(race_ids) < 2:
+    if len(race_ids) < 3:
         race_ids += get_recent_race_ids(gender=gender, fmt_code=fmt_code,
                                          season=PREV_SEASON, n=n-len(race_ids))
     race_ids = race_ids[:n]
@@ -131,20 +133,40 @@ def build_stats_for(gender: str, fmt_code: str, n: int = 6) -> dict:
     log.info(f"[Biathlon] Stats {fmt_code}/{gender} sur {len(race_ids)} courses")
 
     data = {}
-    for race_id in race_ids:
+    for race_idx, race_id in enumerate(race_ids):
+        recency_w = 0.85 ** race_idx  # plus récent = poids plus élevé
         try:
-            results = get_results(race_id)
-            n_fin   = len([r for r in results if r.get("Rank")])
-            for r in results:
-                ibu = r.get("IBUId","")
-                if not ibu or r.get("IRM") or not r.get("Rank"): continue
-                sh = _parse_shooting(r.get("Shootings",""))
+            results  = get_results(race_id)
+            finished = [r for r in results if r.get("Rank") and not r.get("IRM")]
+            n_fin    = len(finished)
+            if n_fin < 5:
+                continue
+
+            # Temps du vainqueur
+            win_time = None
+            for r in finished:
+                if int(r["Rank"]) == 1:
+                    win_time = _time_to_sec(r.get("RunTime", ""))
+                    break
+
+            for r in finished:
+                ibu  = r.get("IBUId", "")
+                if not ibu: continue
+                sh   = _parse_shooting(r.get("Shootings", ""))
+                rank = int(r["Rank"])
+                run_t = _time_to_sec(r.get("RunTime", ""))
+                ski_ratio = (win_time / run_t) if (run_t and win_time and run_t > 0) else None
+
                 if ibu not in data:
                     data[ibu] = {"name": r.get("Name",""), "nat": r.get("Nat",""), "res": []}
                 data[ibu]["res"].append({
-                    "rank":     int(r["Rank"]), "n_fin": n_fin,
-                    "prone":    sh["prone"], "standing": sh["standing"],
-                    "run_sec":  _time_to_sec(r.get("RunTime","")),
+                    "rank":      rank,
+                    "n_fin":     n_fin,
+                    "rel_rank":  rank / n_fin,
+                    "ski_ratio": ski_ratio,
+                    "prone":     sh["prone"],
+                    "standing":  sh["standing"],
+                    "weight":    recency_w,
                 })
         except Exception as e:
             log.warning(f"[Biathlon] stats {race_id}: {e}")
@@ -153,28 +175,42 @@ def build_stats_for(gender: str, fmt_code: str, n: int = 6) -> dict:
     for ibu, d in data.items():
         res = d["res"]
         if not res: continue
-        n = len(res)
-        ranks     = [r["rank"]    for r in res]
-        n_fins    = [r["n_fin"]   for r in res]
-        prones    = [r["prone"]    for r in res if r["prone"]    is not None]
-        standings = [r["standing"] for r in res if r["standing"] is not None]
-        rel_ranks = [rk/max(nf,1) for rk,nf in zip(ranks,n_fins)]
+        total_w = sum(r["weight"] for r in res)
+
+        avg_rel_rank = sum(r["rel_rank"]  * r["weight"] for r in res) / total_w
+        avg_rank     = sum(r["rank"]      * r["weight"] for r in res) / total_w
+        top3_rate    = sum(r["weight"] for r in res if r["rank"] <= 3) / total_w
+
+        prones    = [(r["prone"],     r["weight"]) for r in res if r["prone"]     is not None]
+        standings = [(r["standing"],  r["weight"]) for r in res if r["standing"]  is not None]
+        ski_rats  = [(r["ski_ratio"], r["weight"]) for r in res if r["ski_ratio"] is not None]
+
+        prone_acc    = sum(v*w for v,w in prones)    / sum(w for _,w in prones)    if prones    else 0.82
+        standing_acc = sum(v*w for v,w in standings) / sum(w for _,w in standings) if standings else 0.78
+        ski_score    = sum(v*w for v,w in ski_rats)  / sum(w for _,w in ski_rats)  if ski_rats  else (1 - avg_rel_rank)
+
         stats[ibu] = {
             "name":         d["name"], "nat": d["nat"],
-            "n_races":      n,
-            "avg_rank":     sum(ranks)/n,
-            "avg_rel_rank": sum(rel_ranks)/n,
-            "top3_rate":    sum(1 for rk in ranks if rk<=3)/n,
-            "prone_acc":    sum(prones)/len(prones)       if prones    else 0.82,
-            "standing_acc": sum(standings)/len(standings) if standings else 0.78,
+            "n_races":      len(res),
+            "avg_rank":     round(avg_rank, 2),
+            "avg_rel_rank": round(avg_rel_rank, 4),
+            "top3_rate":    round(top3_rate, 4),
+            "prone_acc":    round(prone_acc, 4),
+            "standing_acc": round(standing_acc, 4),
+            "ski_score":    round(ski_score, 4),
         }
     return stats
 
 def calc_rating(s: dict, fmt: str) -> float:
-    w = {"SP":(0.45,0.40,0.15),"PU":(0.50,0.35,0.15),
-         "IN":(0.38,0.47,0.15),"MS":(0.55,0.30,0.15)}.get(fmt,(0.45,0.40,0.15))
-    ski   = max(0, 1.0 - s.get("avg_rel_rank", 0.5))
-    shoot = s.get("prone_acc",0.82)*0.5 + s.get("standing_acc",0.78)*0.5
+    """Score composite — ski basé sur ratio temps, tir, forme récente."""
+    w = {
+        "SP": (0.42, 0.40, 0.18),
+        "PU": (0.48, 0.35, 0.17),
+        "IN": (0.35, 0.48, 0.17),
+        "MS": (0.52, 0.30, 0.18),
+    }.get(fmt, (0.44, 0.38, 0.18))
+    ski   = min(s.get("ski_score", 1 - s.get("avg_rel_rank", 0.5)), 1.0)
+    shoot = s.get("prone_acc", 0.82) * 0.5 + s.get("standing_acc", 0.78) * 0.5
     form  = s.get("top3_rate", 0.1)
     return w[0]*ski + w[1]*shoot + w[2]*form
 
@@ -217,16 +253,8 @@ def run(silent=False):
 
         msg = "🎿 <b>Biathlon — H2H par course</b>\n\n"
 
-        # Récupère les cotes Winamax via WebSocket (best effort, 15s)
-        log.info("[Biathlon] Connexion WebSocket Winamax...")
-        try:
-            from sports.biathlon.winamax_ws_client import fetch_biathlon_odds, get_winamax_odd_for
-            fetch_biathlon_odds(timeout=15)
-            _winamax_available = True
-        except Exception as e:
-            log.warning(f"[Biathlon] WebSocket Winamax indisponible : {e}")
-            _winamax_available = False
-            def get_winamax_odd_for(a, b): return None
+        _winamax_available = False
+        def get_winamax_odd_for(a, b): return None
 
         # Cache stats par (gender, fmt) pour ne pas recalculer
         stats_cache = {}
@@ -304,10 +332,7 @@ def run(silent=False):
                     "prob_model": round(pa, 4),
                 })
 
-        if _winamax_available:
-            msg += "💡 <i>✅ = value bet détecté vs cotes Winamax réelles · c.j. = cote juste modèle IBU</i>"
-        else:
-            msg += "💡 <i>c.j. = cote juste modèle IBU · Comparer manuellement sur Winamax</i>"
+        msg += "💡 <i>c.j. = cote juste modèle IBU · Comparer sur Winamax</i>"
 
         state["last_run"] = datetime.now(timezone.utc)
         log.info(f"[Biathlon] Message prêt ({len(msg)} chars), envoi Telegram...")
