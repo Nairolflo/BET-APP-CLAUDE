@@ -277,17 +277,29 @@ async function loadAthletes() {
   goTo(2);
   document.getElementById('pick-title').textContent = `⚔️ ${state.raceDesc}`;
   document.getElementById('pick-loader').style.display = 'flex';
+  document.getElementById('pick-loader').innerHTML = '<div class="spinner"></div> Chargement des stats IBU...';
   document.getElementById('picker-layout').style.display = 'none';
   document.getElementById('analyze-btn').disabled = true;
 
-  const res = await fetch(`/api/biathlon/athletes?race_id=${state.raceId}`);
-  const data = await res.json();
-  state.athletes = data.athletes;
+  try {
+    const res = await fetch(`/api/biathlon/athletes?race_id=${state.raceId}`);
+    const data = await res.json();
 
-  document.getElementById('pick-loader').style.display = 'none';
-  document.getElementById('picker-layout').style.display = 'grid';
-  renderAthleteList('a', state.athletes);
-  renderAthleteList('b', state.athletes);
+    if (data.error || !data.athletes?.length) {
+      document.getElementById('pick-loader').innerHTML =
+        `<p style="color:#ff4d6d">❌ ${data.error || 'Aucun athlète trouvé pour cette course.'}</p>`;
+      return;
+    }
+
+    state.athletes = data.athletes;
+    document.getElementById('pick-loader').style.display = 'none';
+    document.getElementById('picker-layout').style.display = 'grid';
+    renderAthleteList('a', state.athletes);
+    renderAthleteList('b', state.athletes);
+  } catch(e) {
+    document.getElementById('pick-loader').innerHTML =
+      `<p style="color:#ff4d6d">❌ Erreur réseau : ${e.message}</p>`;
+  }
 }
 
 function renderAthleteList(col, athletes) {
