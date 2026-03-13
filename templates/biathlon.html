@@ -1,211 +1,408 @@
 {% extends "base.html" %}
-{% block title %}Biathlon Live — Le Loup de Wall Bet{% endblock %}
+{% block title %}Biathlon H2H — ValueBet{% endblock %}
 {% block content %}
-<div class="container">
-    <div class="page-header">
-        <h1>🎿 Biathlon — Live</h1>
-        <p>Value bets H2H · Vainqueur · Podium Top 3 — mis à jour automatiquement</p>
-    </div>
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@400;600;700;800&family=Barlow:wght@400;500;600&display=swap');
 
-    <!-- KPIs biathlon -->
-    <div class="stat-grid">
-        <div class="stat-card">
-            <div class="val" style="color:var(--accent2)" id="kpi-total">{{ stats.total or 0 }}</div>
-            <div class="lbl">Bets totaux</div>
-        </div>
-        <div class="stat-card">
-            <div class="val c-high" id="kpi-wins">{{ stats.wins or 0 }}</div>
-            <div class="lbl">Gagnés</div>
-        </div>
-        <div class="stat-card">
-            <div class="val c-neg" id="kpi-losses">{{ stats.losses or 0 }}</div>
-            <div class="lbl">Perdus</div>
-        </div>
-        <div class="stat-card">
-            <div class="val" style="color:var(--yellow)" id="kpi-pending">{{ stats.pending or 0 }}</div>
-            <div class="lbl">En attente</div>
-        </div>
-        <div class="stat-card">
-            <div class="val {% if (stats.win_rate or 0) >= 55 %}c-high{% elif (stats.win_rate or 0) >= 45 %}c-mid{% else %}c-neg{% endif %}" id="kpi-wr">
-                {{ stats.win_rate or 0 }}%
-            </div>
-            <div class="lbl">Win Rate</div>
-        </div>
-        <div class="stat-card">
-            <div class="val {% if (stats.roi or 0) > 0 %}c-high{% else %}c-neg{% endif %}" id="kpi-roi">
-                {% if (stats.roi or 0) > 0 %}+{% endif %}{{ stats.roi or 0 }}%
-            </div>
-            <div class="lbl">ROI</div>
-        </div>
-    </div>
+  .biat-wrap { max-width: 1100px; margin: 0 auto; padding: 2rem; font-family: 'Barlow', sans-serif; }
 
-    <!-- Tabs -->
-    <div class="tabs">
-        <div class="tab active-cyan" data-group="main" data-target="h2h" data-cyan="1">⚔️ H2H</div>
-        <div class="tab" data-group="main" data-target="winner" data-cyan="1">🏆 Vainqueur</div>
-        <div class="tab" data-group="main" data-target="top3" data-cyan="1">🎖️ Top 3</div>
-        <div class="tab" data-group="main" data-target="upcoming" data-cyan="1">📅 Calendrier</div>
-    </div>
+  /* Header */
+  .biat-header { display: flex; align-items: center; gap: 1rem; margin-bottom: 2rem; }
+  .biat-header h1 { font-family: 'Barlow Condensed', sans-serif; font-size: 2.2rem; font-weight: 800; letter-spacing: 1px; }
+  .biat-header .tag { background: #00d4aa22; color: #00d4aa; border: 1px solid #00d4aa44; border-radius: 6px; padding: 0.2rem 0.7rem; font-size: 0.75rem; font-weight: 700; letter-spacing: 1px; text-transform: uppercase; }
 
-    <!-- H2H -->
-    <div class="tab-content active" data-group="main" data-id="h2h">
-        {% if h2h_bets %}
-        <div style="display:flex;flex-direction:column;gap:0.8rem">
-            {% for b in h2h_bets %}
-            <div class="h2h-card">
-                <div class="athlete">
-                    <div class="name">{{ b.pick }}</div>
-                    <div class="nat">{{ b.pick_nat or '' }}</div>
-                    <div class="prob" style="color:var(--accent2)">{{ "%.0f"|format(b.prob_model * 100) }}%</div>
-                    <div style="font-size:0.7rem;color:var(--text-dim);margin-top:0.2rem">modèle</div>
-                </div>
-                <div style="text-align:center;flex-shrink:0">
-                    <div class="vs">VS</div>
-                    <div class="odd-tag mt1">{{ b.odd }}</div>
-                    <div class="value-badge mt1">+{{ "%.1f"|format(b.value_pct) }}%</div>
-                    <div style="font-size:0.68rem;color:var(--text-dim);margin-top:0.4rem">{{ b.bookmaker }}</div>
-                </div>
-                <div class="athlete">
-                    <div class="name">{{ b.opponent }}</div>
-                    <div class="nat">{{ b.opponent_nat or '' }}</div>
-                    <div class="prob" style="color:var(--text-dim)">{{ "%.0f"|format((1 - b.prob_model) * 100) }}%</div>
-                    <div style="font-size:0.7rem;color:var(--text-dim);margin-top:0.2rem">modèle</div>
-                </div>
-                <div style="min-width:110px;text-align:right">
-                    <div class="badge badge-h2h">{{ b.race_format or 'H2H' }}</div>
-                    <div style="font-size:0.72rem;color:var(--text-dim);margin-top:0.4rem">{{ b.race_date or '' }}</div>
-                    <div style="font-size:0.7rem;color:var(--text-dim)">Kelly {{ "%.1f"|format((b.kelly or 0) * 100) }}%</div>
-                    <div class="badge {% if b.result == 'WIN' %}badge-win{% elif b.result == 'LOSS' %}badge-loss{% else %}badge-pending{% endif %} mt1">
-                        {{ b.result or 'EN ATTENTE' }}
-                    </div>
-                </div>
-            </div>
-            {% endfor %}
-        </div>
-        {% else %}
-        <div class="empty">
-            <div style="font-size:2rem;margin-bottom:1rem">⚔️</div>
-            <div>Aucun value bet H2H détecté pour l'instant</div>
-            <div style="font-size:0.8rem;margin-top:0.5rem">Les cotes H2H apparaissent ~48h avant les grandes épreuves</div>
-        </div>
-        {% endif %}
-    </div>
+  /* Steps breadcrumb */
+  .steps { display: flex; align-items: center; gap: 0.5rem; margin-bottom: 2rem; font-size: 0.82rem; color: #8b8fa8; }
+  .steps .step { padding: 0.25rem 0.7rem; border-radius: 20px; transition: all 0.2s; cursor: default; }
+  .steps .step.active { background: #6c63ff22; color: #6c63ff; border: 1px solid #6c63ff44; }
+  .steps .step.done { color: #00d4aa; }
+  .steps .sep { opacity: 0.3; }
 
-    <!-- Vainqueur -->
-    <div class="tab-content" data-group="main" data-id="winner">
-        {% if winner_bets %}
-        <div class="table-wrap">
-        <table>
-            <thead><tr>
-                <th>Athlète</th><th>Course</th><th>Cote</th>
-                <th>Modèle</th><th>Implicite</th><th>Value</th><th>Kelly</th><th>Statut</th>
-            </tr></thead>
-            <tbody>
-            {% for b in winner_bets %}
-            <tr>
-                <td><strong>{{ b.pick }}</strong></td>
-                <td>
-                    <span class="badge badge-h2h">{{ b.race_format }}</span>
-                    <span style="margin-left:0.4rem;font-size:0.82rem">{{ b.race_name }}</span>
-                </td>
-                <td style="font-weight:700;color:var(--accent)">{{ b.odd }}</td>
-                <td class="c-high">{{ "%.0f"|format(b.prob_model * 100) }}%</td>
-                <td style="color:var(--text-dim)">{{ "%.0f"|format(b.prob_implied * 100) }}%</td>
-                <td><span class="badge badge-value">+{{ "%.1f"|format(b.value_pct) }}%</span></td>
-                <td style="color:var(--text-dim)">{{ "%.1f"|format((b.kelly or 0)*100) }}%</td>
-                <td><span class="badge {% if b.result == 'WIN' %}badge-win{% elif b.result == 'LOSS' %}badge-loss{% else %}badge-pending{% endif %}">{{ b.result or 'PENDING' }}</span></td>
-            </tr>
-            {% endfor %}
-            </tbody>
-        </table>
-        </div>
-        {% else %}
-        <div class="empty">
-            <div style="font-size:2rem;margin-bottom:1rem">🏆</div>
-            <div>Aucun value bet vainqueur pour l'instant</div>
-        </div>
-        {% endif %}
-    </div>
+  /* Main panels */
+  .panel { display: none; animation: fadeIn 0.25s ease; }
+  .panel.visible { display: block; }
+  @keyframes fadeIn { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: translateY(0); } }
 
-    <!-- Top 3 -->
-    <div class="tab-content" data-group="main" data-id="top3">
-        {% if top3_predictions %}
-        <div class="grid-2">
-            {% for pred in top3_predictions %}
-            <div class="podium-card">
-                <div class="podium-header">
-                    <div>
-                        <div style="font-weight:700">{{ pred.race_name }}</div>
-                        <div style="font-size:0.75rem;color:var(--text-dim)">{{ pred.race_date }} · {{ pred.location }}</div>
-                    </div>
-                    <span class="badge badge-h2h">{{ pred.race_format }}</span>
-                </div>
-                {% for i, a in pred.athletes[:8]|enumerate %}
-                <div class="podium-row">
-                    <div class="rank" style="color:{% if i == 0 %}#ffd700{% elif i == 1 %}#c0c0c0{% elif i == 2 %}#cd7f32{% else %}var(--text-dim){% endif %}">
-                        {% if i == 0 %}🥇{% elif i == 1 %}🥈{% elif i == 2 %}🥉{% else %}{{ i+1 }}{% endif %}
-                    </div>
-                    <div style="flex:1">
-                        <div class="pname">{{ a.name }}</div>
-                        <div class="pnat">{{ a.nat }}</div>
-                    </div>
-                    <div class="pbar">
-                        <div class="progress">
-                            <div class="progress-bar" style="width:{{ (a.p_top3 * 100)|round }}%;background:{% if i < 3 %}var(--accent2){% else %}var(--surface3){% endif %}"></div>
-                        </div>
-                    </div>
-                    <div class="ppct">{{ "%.0f"|format(a.p_top3 * 100) }}%</div>
-                </div>
-                {% endfor %}
-            </div>
-            {% endfor %}
-        </div>
-        {% else %}
-        <div class="empty">
-            <div style="font-size:2rem;margin-bottom:1rem">🎖️</div>
-            <div>Prédictions podium disponibles le matin des courses</div>
-            <div style="font-size:0.8rem;margin-top:0.5rem">Le worker calcule les Top 3 à 07h30 UTC</div>
-        </div>
-        {% endif %}
-    </div>
+  /* Race cards */
+  .race-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 1rem; }
+  .race-card {
+    background: #1a1d2e; border: 1px solid #2e3153; border-radius: 12px;
+    padding: 1.2rem 1.4rem; cursor: pointer; transition: all 0.18s;
+    display: flex; align-items: center; gap: 1rem;
+  }
+  .race-card:hover { border-color: #6c63ff; background: #1e2040; transform: translateY(-2px); }
+  .race-icon { font-size: 2rem; flex-shrink: 0; }
+  .race-info .name { font-family: 'Barlow Condensed', sans-serif; font-size: 1.1rem; font-weight: 700; }
+  .race-info .meta { font-size: 0.78rem; color: #8b8fa8; margin-top: 0.2rem; }
+  .fmt-badge { display: inline-block; padding: 0.15rem 0.5rem; border-radius: 4px; font-size: 0.7rem; font-weight: 700; text-transform: uppercase; margin-top: 0.4rem; }
+  .fmt-SP { background: #ffd16622; color: #ffd166; }
+  .fmt-PU { background: #6c63ff22; color: #6c63ff; }
+  .fmt-MS { background: #ff4d6d22; color: #ff4d6d; }
+  .fmt-IN { background: #00d4aa22; color: #00d4aa; }
 
-    <!-- Calendrier -->
-    <div class="tab-content" data-group="main" data-id="upcoming">
-        {% if upcoming_races %}
-        <div style="display:flex;flex-direction:column;gap:0.6rem">
-            {% for r in upcoming_races %}
-            <div class="card" style="display:flex;align-items:center;gap:1.2rem;padding:1rem 1.5rem">
-                <div style="font-size:1.5rem">{% if r.gender == 'W' %}♀️{% else %}♂️{% endif %}</div>
-                <div style="flex:1">
-                    <div style="font-weight:700">{{ r.description }}</div>
-                    <div style="font-size:0.78rem;color:var(--text-dim)">{{ r.location }}</div>
-                </div>
-                <span class="badge badge-league">{{ r.format_name }}</span>
-                <div style="font-size:0.82rem;color:var(--text-dim);min-width:80px;text-align:right">{{ r.date }}</div>
-            </div>
-            {% endfor %}
-        </div>
-        {% else %}
-        <div class="empty">
-            <div style="font-size:2rem;margin-bottom:1rem">📅</div>
-            <div>Aucune course dans les 10 prochains jours</div>
-        </div>
-        {% endif %}
+  /* Mode selection */
+  .mode-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 1rem; max-width: 560px; }
+  .mode-card {
+    background: #1a1d2e; border: 2px solid #2e3153; border-radius: 16px;
+    padding: 2rem; cursor: pointer; transition: all 0.2s; text-align: center;
+  }
+  .mode-card:hover { border-color: #6c63ff; background: #1e2040; }
+  .mode-card .icon { font-size: 2.5rem; margin-bottom: 0.8rem; }
+  .mode-card .title { font-family: 'Barlow Condensed', sans-serif; font-size: 1.3rem; font-weight: 700; margin-bottom: 0.4rem; }
+  .mode-card .desc { font-size: 0.82rem; color: #8b8fa8; }
+
+  /* Athlete picker */
+  .picker-layout { display: grid; grid-template-columns: 1fr 1fr; gap: 2rem; }
+  .picker-col { }
+  .picker-title { font-family: 'Barlow Condensed', sans-serif; font-size: 1rem; font-weight: 700; color: #8b8fa8; text-transform: uppercase; letter-spacing: 1px; margin-bottom: 1rem; }
+  .search-box {
+    width: 100%; background: #1a1d2e; border: 1px solid #2e3153; border-radius: 8px;
+    padding: 0.6rem 1rem; color: #e8eaf6; font-size: 0.9rem; margin-bottom: 0.8rem;
+    outline: none; transition: border-color 0.2s;
+  }
+  .search-box:focus { border-color: #6c63ff; }
+  .athlete-list { max-height: 420px; overflow-y: auto; display: flex; flex-direction: column; gap: 0.4rem; }
+  .athlete-list::-webkit-scrollbar { width: 4px; }
+  .athlete-list::-webkit-scrollbar-track { background: transparent; }
+  .athlete-list::-webkit-scrollbar-thumb { background: #2e3153; border-radius: 2px; }
+  .ath-row {
+    background: #1a1d2e; border: 1px solid #2e3153; border-radius: 8px;
+    padding: 0.65rem 0.9rem; cursor: pointer; transition: all 0.15s;
+    display: flex; align-items: center; gap: 0.8rem;
+  }
+  .ath-row:hover { border-color: #6c63ff44; background: #1e2040; }
+  .ath-row.selected { border-color: #6c63ff; background: #6c63ff15; }
+  .ath-row.disabled { opacity: 0.35; cursor: not-allowed; pointer-events: none; }
+  .ath-rank { font-family: 'Barlow Condensed', sans-serif; font-size: 1.1rem; font-weight: 700; color: #6c63ff; width: 2rem; text-align: right; flex-shrink: 0; }
+  .ath-name { font-weight: 600; font-size: 0.9rem; flex: 1; }
+  .ath-nat { font-size: 0.75rem; color: #8b8fa8; }
+  .ath-stats { font-size: 0.72rem; color: #8b8fa8; text-align: right; line-height: 1.4; }
+
+  /* Duel result */
+  .duel-card {
+    background: #1a1d2e; border: 1px solid #2e3153; border-radius: 16px;
+    padding: 2rem; max-width: 680px;
+  }
+  .duel-vs { display: grid; grid-template-columns: 1fr auto 1fr; gap: 1.5rem; align-items: center; margin-bottom: 2rem; }
+  .duel-athlete { text-align: center; }
+  .duel-athlete .dname { font-family: 'Barlow Condensed', sans-serif; font-size: 1.5rem; font-weight: 800; }
+  .duel-athlete .dnat { color: #8b8fa8; font-size: 0.8rem; margin-bottom: 0.5rem; }
+  .duel-athlete .dprob { font-size: 2.2rem; font-weight: 800; font-family: 'Barlow Condensed', sans-serif; }
+  .duel-athlete .dcote { font-size: 0.85rem; color: #8b8fa8; }
+  .duel-athlete.winner .dprob { color: #00d4aa; }
+  .duel-athlete.loser .dprob { color: #8b8fa8; }
+  .vs-sep { text-align: center; }
+  .vs-sep .vs { font-family: 'Barlow Condensed', sans-serif; font-size: 1.4rem; font-weight: 800; color: #2e3153; }
+  .vs-sep .bar { height: 4px; border-radius: 2px; margin-top: 0.5rem; background: linear-gradient(to right, #6c63ff, #00d4aa); }
+
+  .duel-stats { display: grid; grid-template-columns: 1fr 1fr; gap: 1rem; }
+  .dstat-block { background: #252840; border-radius: 10px; padding: 1rem; }
+  .dstat-block .label { font-size: 0.72rem; text-transform: uppercase; letter-spacing: 1px; color: #8b8fa8; margin-bottom: 0.6rem; }
+  .dstat-row { display: flex; justify-content: space-between; font-size: 0.85rem; padding: 0.2rem 0; }
+  .dstat-row .val { font-weight: 600; }
+  .dstat-row .val.better { color: #00d4aa; }
+
+  /* Podium */
+  .podium-grid { display: flex; flex-direction: column; gap: 0.6rem; max-width: 560px; }
+  .pod-row {
+    background: #1a1d2e; border: 1px solid #2e3153; border-radius: 10px;
+    padding: 0.9rem 1.2rem; display: flex; align-items: center; gap: 1rem;
+  }
+  .pod-rank { font-family: 'Barlow Condensed', sans-serif; font-size: 1.4rem; width: 2.5rem; text-align: center; flex-shrink: 0; }
+  .pod-info { flex: 1; }
+  .pod-info .pname { font-weight: 600; font-size: 0.95rem; }
+  .pod-info .pmeta { font-size: 0.75rem; color: #8b8fa8; margin-top: 0.2rem; }
+  .pod-pct { font-family: 'Barlow Condensed', sans-serif; font-size: 1.5rem; font-weight: 700; color: #6c63ff; }
+  .pod-bar { height: 3px; border-radius: 2px; background: #6c63ff44; margin-top: 0.4rem; overflow: hidden; }
+  .pod-bar-fill { height: 100%; background: linear-gradient(to right, #6c63ff, #00d4aa); border-radius: 2px; transition: width 0.6s ease; }
+
+  /* Back button */
+  .back-btn { background: none; border: 1px solid #2e3153; border-radius: 8px; color: #8b8fa8; padding: 0.5rem 1rem; cursor: pointer; font-size: 0.85rem; transition: all 0.15s; margin-bottom: 1.5rem; display: flex; align-items: center; gap: 0.4rem; }
+  .back-btn:hover { border-color: #6c63ff; color: #e8eaf6; }
+
+  /* Loading */
+  .loader { display: flex; align-items: center; gap: 0.8rem; color: #8b8fa8; padding: 2rem 0; }
+  .spinner { width: 20px; height: 20px; border: 2px solid #2e3153; border-top-color: #6c63ff; border-radius: 50%; animation: spin 0.7s linear infinite; }
+  @keyframes spin { to { transform: rotate(360deg); } }
+
+  .analyze-btn {
+    background: linear-gradient(135deg, #6c63ff, #00d4aa); border: none; border-radius: 10px;
+    color: white; padding: 0.9rem 2rem; font-family: 'Barlow Condensed', sans-serif;
+    font-size: 1.1rem; font-weight: 700; letter-spacing: 1px; cursor: pointer;
+    transition: all 0.2s; margin-top: 1.5rem; width: 100%; max-width: 320px;
+  }
+  .analyze-btn:hover { opacity: 0.9; transform: translateY(-1px); }
+  .analyze-btn:disabled { opacity: 0.4; cursor: not-allowed; transform: none; }
+
+  @media (max-width: 640px) {
+    .picker-layout { grid-template-columns: 1fr; }
+    .mode-grid { grid-template-columns: 1fr; }
+    .duel-vs { grid-template-columns: 1fr; text-align: center; }
+  }
+</style>
+
+<div class="biat-wrap">
+  <div class="biat-header">
+    <h1>🎿 Biathlon H2H</h1>
+    <span class="tag">Modèle IBU</span>
+  </div>
+
+  <!-- Steps -->
+  <div class="steps" id="steps">
+    <span class="step active" data-step="0">Courses</span>
+    <span class="sep">›</span>
+    <span class="step" data-step="1">Mode</span>
+    <span class="sep">›</span>
+    <span class="step" data-step="2">Athlètes</span>
+    <span class="sep">›</span>
+    <span class="step" data-step="3">Résultat</span>
+  </div>
+
+  <!-- Panel 0 : liste des courses -->
+  <div class="panel visible" id="panel-races">
+    <div class="loader" id="races-loader"><div class="spinner"></div> Chargement des courses...</div>
+    <div class="race-grid" id="race-grid"></div>
+  </div>
+
+  <!-- Panel 1 : mode H2H / Podium -->
+  <div class="panel" id="panel-mode">
+    <button class="back-btn" onclick="goTo(0)">← Retour</button>
+    <div id="mode-race-title" style="font-family:'Barlow Condensed',sans-serif;font-size:1.3rem;font-weight:700;margin-bottom:1.5rem;"></div>
+    <div class="mode-grid">
+      <div class="mode-card" onclick="selectMode('h2h')">
+        <div class="icon">⚔️</div>
+        <div class="title">H2H</div>
+        <div class="desc">Choisir deux athlètes et voir leurs probabilités en face à face</div>
+      </div>
+      <div class="mode-card" onclick="selectMode('podium')">
+        <div class="icon">🏆</div>
+        <div class="title">Podium</div>
+        <div class="desc">Top 8 favoris de la course selon le modèle IBU</div>
+      </div>
     </div>
+  </div>
+
+  <!-- Panel 2 : picker athlètes -->
+  <div class="panel" id="panel-pick">
+    <button class="back-btn" onclick="goTo(1)">← Retour</button>
+    <div style="font-family:'Barlow Condensed',sans-serif;font-size:1.3rem;font-weight:700;margin-bottom:1.5rem;" id="pick-title"></div>
+    <div class="loader" id="pick-loader"><div class="spinner"></div> Chargement des stats IBU...</div>
+    <div class="picker-layout" id="picker-layout" style="display:none;">
+      <div class="picker-col">
+        <div class="picker-title">⚔️ Athlète A</div>
+        <input class="search-box" placeholder="Rechercher..." oninput="filterAthletes('a', this.value)" id="search-a">
+        <div class="athlete-list" id="list-a"></div>
+      </div>
+      <div class="picker-col">
+        <div class="picker-title" id="col-b-title">⚔️ Athlète B</div>
+        <input class="search-box" placeholder="Rechercher..." oninput="filterAthletes('b', this.value)" id="search-b">
+        <div class="athlete-list" id="list-b"></div>
+      </div>
+    </div>
+    <button class="analyze-btn" id="analyze-btn" disabled onclick="runDuel()">⚔️ Analyser le duel</button>
+  </div>
+
+  <!-- Panel 3 : résultat -->
+  <div class="panel" id="panel-result">
+    <button class="back-btn" onclick="goTo(2)">← Nouveau duel</button>
+    <div id="result-container"></div>
+  </div>
 </div>
 
 <script>
-// Active le premier tab cyan au chargement
-document.querySelectorAll('.tab[data-cyan]').forEach(tab => {
-    tab.addEventListener('click', () => {
-        const group = tab.dataset.group;
-        document.querySelectorAll(`.tab[data-group="${group}"]`).forEach(t => {
-            t.classList.remove('active', 'active-cyan');
-        });
-        tab.classList.add('active-cyan');
-        document.querySelectorAll(`.tab-content[data-group="${group}"]`).forEach(c => c.classList.remove('active'));
-        document.querySelector(`.tab-content[data-group="${group}"][data-id="${tab.dataset.target}"]`)?.classList.add('active');
-    });
-});
+let state = { raceId: null, raceDesc: '', raceFmt: '', athletes: [], selA: null, selB: null };
+
+// ─── Navigation ──────────────────────────────────────────────────────────────
+function goTo(step) {
+  ['panel-races','panel-mode','panel-pick','panel-result'].forEach((id, i) => {
+    document.getElementById(id).classList.toggle('visible', i === step);
+  });
+  document.querySelectorAll('.steps .step').forEach((el, i) => {
+    el.classList.toggle('active', i === step);
+    el.classList.toggle('done', i < step);
+  });
+}
+
+// ─── Chargement courses ──────────────────────────────────────────────────────
+async function loadRaces() {
+  const res = await fetch('/api/biathlon/races');
+  const data = await res.json();
+  document.getElementById('races-loader').style.display = 'none';
+  const grid = document.getElementById('race-grid');
+
+  const fmtNames = {SP:'Sprint', PU:'Poursuite', IN:'Individuelle', MS:'Mass Start'};
+  data.races.forEach(r => {
+    const card = document.createElement('div');
+    card.className = 'race-card';
+    card.innerHTML = `
+      <div class="race-icon">${r.gender === 'W' ? '♀️' : '♂️'}</div>
+      <div class="race-info">
+        <div class="name">${r.description}</div>
+        <div class="meta">📅 ${r.date}${r.location ? ' · ' + r.location : ''}</div>
+        <span class="fmt-badge fmt-${r.format}">${fmtNames[r.format] || r.format}</span>
+      </div>`;
+    card.onclick = () => selectRace(r);
+    grid.appendChild(card);
+  });
+  if (!data.races.length) grid.innerHTML = '<p style="color:#8b8fa8">Aucune course à venir.</p>';
+}
+
+// ─── Sélection course ────────────────────────────────────────────────────────
+function selectRace(r) {
+  state.raceId = r.race_id;
+  state.raceDesc = r.description;
+  state.raceFmt = r.format;
+  state.selA = null; state.selB = null;
+  document.getElementById('mode-race-title').textContent = `🎿 ${r.description} · ${r.date}`;
+  goTo(1);
+}
+
+function selectMode(mode) {
+  if (mode === 'podium') loadPodium();
+  else loadAthletes();
+}
+
+// ─── Chargement athlètes ─────────────────────────────────────────────────────
+async function loadAthletes() {
+  goTo(2);
+  document.getElementById('pick-title').textContent = `⚔️ ${state.raceDesc}`;
+  document.getElementById('pick-loader').style.display = 'flex';
+  document.getElementById('picker-layout').style.display = 'none';
+  document.getElementById('analyze-btn').disabled = true;
+
+  const res = await fetch(`/api/biathlon/athletes?race_id=${state.raceId}`);
+  const data = await res.json();
+  state.athletes = data.athletes;
+
+  document.getElementById('pick-loader').style.display = 'none';
+  document.getElementById('picker-layout').style.display = 'grid';
+  renderAthleteList('a', state.athletes);
+  renderAthleteList('b', state.athletes);
+}
+
+function renderAthleteList(col, athletes) {
+  const list = document.getElementById(`list-${col}`);
+  list.innerHTML = '';
+  const q = document.getElementById(`search-${col}`).value.toLowerCase();
+  const filtered = athletes.filter(a => a.name.toLowerCase().includes(q) || a.nat.toLowerCase().includes(q));
+  
+  filtered.forEach(a => {
+    const row = document.createElement('div');
+    row.className = 'ath-row';
+    if (col === 'a' && state.selA?.ibu === a.ibu) row.classList.add('selected');
+    if (col === 'b' && state.selB?.ibu === a.ibu) row.classList.add('selected');
+    if (col === 'b' && state.selA?.ibu === a.ibu) row.classList.add('disabled');
+    if (col === 'a' && state.selB?.ibu === a.ibu) row.classList.add('disabled');
+
+    row.innerHTML = `
+      <div class="ath-rank">#${Math.round(a.avg_rank * 10) / 10}</div>
+      <div class="ath-name">${a.name}</div>
+      <div class="ath-nat">${a.nat}</div>
+      <div class="ath-stats">C:${Math.round(a.prone_acc*100)}% D:${Math.round(a.standing_acc*100)}%<br>${a.n_races} courses</div>`;
+
+    row.onclick = () => {
+      if (col === 'a') { state.selA = a; }
+      else { state.selB = a; }
+      renderAthleteList('a', state.athletes);
+      renderAthleteList('b', state.athletes);
+      document.getElementById('analyze-btn').disabled = !(state.selA && state.selB);
+    };
+    list.appendChild(row);
+  });
+}
+
+function filterAthletes(col, q) { renderAthleteList(col, state.athletes); }
+
+// ─── Duel ─────────────────────────────────────────────────────────────────────
+async function runDuel() {
+  if (!state.selA || !state.selB) return;
+  goTo(3);
+  document.getElementById('result-container').innerHTML = '<div class="loader"><div class="spinner"></div> Calcul en cours...</div>';
+
+  const res = await fetch(`/api/biathlon/duel?race_id=${state.raceId}&ibu_a=${state.selA.ibu}&ibu_b=${state.selB.ibu}`);
+  const d = await res.json();
+
+  const winA = d.prob_a > d.prob_b;
+  document.getElementById('result-container').innerHTML = `
+    <div class="duel-card">
+      <div class="duel-vs">
+        <div class="duel-athlete ${winA ? 'winner' : 'loser'}">
+          <div class="dname">${d.name_a}</div>
+          <div class="dnat">${d.nat_a}</div>
+          <div class="dprob">${Math.round(d.prob_a * 100)}%</div>
+          <div class="dcote">Cote juste : ${d.cote_a}</div>
+        </div>
+        <div class="vs-sep">
+          <div class="vs">VS</div>
+          <div class="bar"></div>
+        </div>
+        <div class="duel-athlete ${!winA ? 'winner' : 'loser'}">
+          <div class="dname">${d.name_b}</div>
+          <div class="dnat">${d.nat_b}</div>
+          <div class="dprob">${Math.round(d.prob_b * 100)}%</div>
+          <div class="dcote">Cote juste : ${d.cote_b}</div>
+        </div>
+      </div>
+      <div class="duel-stats">
+        <div class="dstat-block">
+          <div class="label">🎯 Tir couché</div>
+          <div class="dstat-row"><span>${d.name_a}</span><span class="val ${d.prone_a >= d.prone_b ? 'better' : ''}">${Math.round(d.prone_a*100)}%</span></div>
+          <div class="dstat-row"><span>${d.name_b}</span><span class="val ${d.prone_b > d.prone_a ? 'better' : ''}">${Math.round(d.prone_b*100)}%</span></div>
+        </div>
+        <div class="dstat-block">
+          <div class="label">🎯 Tir debout</div>
+          <div class="dstat-row"><span>${d.name_a}</span><span class="val ${d.stand_a >= d.stand_b ? 'better' : ''}">${Math.round(d.stand_a*100)}%</span></div>
+          <div class="dstat-row"><span>${d.name_b}</span><span class="val ${d.stand_b > d.stand_a ? 'better' : ''}">${Math.round(d.stand_b*100)}%</span></div>
+        </div>
+        <div class="dstat-block">
+          <div class="label">⛷️ Rang moyen</div>
+          <div class="dstat-row"><span>${d.name_a}</span><span class="val ${d.rank_a <= d.rank_b ? 'better' : ''}">#${d.rank_a}</span></div>
+          <div class="dstat-row"><span>${d.name_b}</span><span class="val ${d.rank_b < d.rank_a ? 'better' : ''}">#${d.rank_b}</span></div>
+        </div>
+        <div class="dstat-block">
+          <div class="label">🏆 Top 3</div>
+          <div class="dstat-row"><span>${d.name_a}</span><span class="val ${d.top3_a >= d.top3_b ? 'better' : ''}">${Math.round(d.top3_a*100)}%</span></div>
+          <div class="dstat-row"><span>${d.name_b}</span><span class="val ${d.top3_b > d.top3_a ? 'better' : ''}">${Math.round(d.top3_b*100)}%</span></div>
+        </div>
+      </div>
+      <div style="margin-top:1.2rem;padding:0.8rem 1rem;background:#252840;border-radius:8px;font-size:0.82rem;color:#8b8fa8;">
+        💡 Favori : <strong style="color:#e8eaf6">${winA ? d.name_a : d.name_b}</strong> —
+        Si Winamax propose une cote &gt; <strong style="color:#00d4aa">${winA ? d.cote_a : d.cote_b}</strong> → value bet ✅
+      </div>
+    </div>`;
+}
+
+// ─── Podium ──────────────────────────────────────────────────────────────────
+async function loadPodium() {
+  goTo(3);
+  document.getElementById('result-container').innerHTML = '<div class="loader"><div class="spinner"></div> Calcul podium...</div>';
+
+  const res = await fetch(`/api/biathlon/podium?race_id=${state.raceId}`);
+  const d = await res.json();
+  const medals = ['🥇','🥈','🥉','4️⃣','5️⃣','6️⃣','7️⃣','8️⃣'];
+  const maxPct = d.podium[0]?.pct || 1;
+
+  let html = `<h2 style="font-family:'Barlow Condensed',sans-serif;font-size:1.5rem;font-weight:800;margin-bottom:1.2rem;">🏆 ${state.raceDesc}</h2>
+  <div class="podium-grid">`;
+  d.podium.forEach((p, i) => {
+    html += `
+    <div class="pod-row">
+      <div class="pod-rank">${medals[i]}</div>
+      <div class="pod-info">
+        <div class="pname">${p.name} <span style="color:#8b8fa8;font-size:0.8rem">${p.nat}</span></div>
+        <div class="pmeta">Rang moy. #${p.rank} · C:${Math.round(p.prone*100)}% D:${Math.round(p.stand*100)}% · Top3:${Math.round(p.top3*100)}%</div>
+        <div class="pod-bar"><div class="pod-bar-fill" style="width:${Math.round(p.pct/maxPct*100)}%"></div></div>
+      </div>
+      <div class="pod-pct">${p.pct}%</div>
+    </div>`;
+  });
+  html += '</div>';
+  document.getElementById('result-container').innerHTML = html;
+  // Bouton retour
+  document.querySelector('#panel-result .back-btn').onclick = () => goTo(1);
+}
+
+// Init
+loadRaces();
 </script>
 {% endblock %}
