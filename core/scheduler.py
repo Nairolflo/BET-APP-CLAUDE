@@ -119,6 +119,14 @@ def handle_callback(callback_query: dict):
         race_id, ibu_a, ibu_b = parts[0], parts[1], parts[2]
         from sports.biathlon.handlers import handle_duel
         threading.Thread(target=handle_duel, args=(race_id, ibu_a, ibu_b, chat_id), daemon=True).start()
+    elif data.startswith("biat_selb_"):
+        # biat_selb_{race_id}_{ibu_a}_{page}
+        parts = data[len("biat_selb_"):].split("_")
+        page = int(parts[-1]); ibu_a = parts[-2]; rid = "_".join(parts[:-2])
+        from sports.biathlon.handlers import handle_select_b_page
+        threading.Thread(target=handle_select_b_page, args=(rid, ibu_a, page, chat_id), daemon=True).start()
+    elif data == "noop":
+        pass  # bouton compteur/info, rien à faire
     elif data.startswith("biat_pod_"):
         race_id = data[len("biat_pod_"):]
         from sports.biathlon.handlers import handle_podium

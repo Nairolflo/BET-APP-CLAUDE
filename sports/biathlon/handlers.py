@@ -169,35 +169,36 @@ def handle_h2h_athletes(race_id: str, page: int = 0, chat_id: str = None):
     fmt    = race.get("format","SP")
     desc   = race.get("description","Course")
 
-    stats = _build_stats(gender, fmt, n=6)
+    stats = _build_stats(gender, fmt, n=10)  # 10 dernières courses = plus d'athlètes
     if not stats:
         send_message("❌ Pas de stats disponibles pour cette course.")
         return
 
+    # Tous les athlètes triés par rang moyen
     top = sorted(stats.items(), key=lambda x: x[1]["avg_rank"])
-    PER_PAGE = 8
+    PER_PAGE = 10
     total_pages = math.ceil(len(top) / PER_PAGE)
     slice_ = top[page*PER_PAGE:(page+1)*PER_PAGE]
 
     rows = []
     for ibu, s in slice_:
-        label = f"{s['name']} {s['nat']} (#{round(s['avg_rank'],1)})"
+        label = f"{s['name']} {s['nat']} · #{round(s['avg_rank'],1)}"
         rows.append([{"text": label, "callback_data": f"biat_sel_{race_id}_{ibu}"}])
 
     # Navigation pages
     nav = []
     if page > 0:
-        nav.append({"text": "◀️", "callback_data": f"biat_h2hp_{race_id}_{page-1}"})
+        nav.append({"text": f"◀️ Préc.", "callback_data": f"biat_h2hp_{race_id}_{page-1}"})
+    nav.append({"text": f"{page+1}/{total_pages} · {len(top)} athlètes", "callback_data": "noop"})
     if page < total_pages - 1:
-        nav.append({"text": "▶️", "callback_data": f"biat_h2hp_{race_id}_{page+1}"})
-    if nav:
-        rows.append(nav)
+        nav.append({"text": f"Suiv. ▶️", "callback_data": f"biat_h2hp_{race_id}_{page+1}"})
+    rows.append(nav)
     rows.append([{"text": "◀️ Retour", "callback_data": f"biat_race_{race_id}"}])
 
     kb = make_keyboard(rows)
     send_message(
-        f"🎿 <b>{desc}</b> — Choisir l'athlète A\n"
-        f"<i>(page {page+1}/{total_pages})</i>",
+        f"🎿 <b>{desc}</b>\n"
+        f"👤 Choisir l'athlète A — {len(top)} disponibles",
         reply_markup=kb
     )
 
@@ -231,13 +232,20 @@ def handle_select_a(race_id: str, ibu_a: str, chat_id: str):
     fmt   = sess.get("fmt","SP")
     desc  = sess.get("desc","")
 
-    # Liste B (tous sauf A) triés par avg_rank
+    # Liste B (tous sauf A) triés par avg_rank — paginés
     top = [(ibu, s) for ibu, s in sorted(stats.items(), key=lambda x: x[1]["avg_rank"]) if ibu != ibu_a]
+    PER_PAGE = 10
+    total_pages = math.ceil(len(top) / PER_PAGE)
 
     rows = []
-    for ibu_b, sb in top[:12]:
-        label = f"{sb['name']} {sb['nat']} (#{round(sb['avg_rank'],1)})"
+    for ibu_b, sb in top[:PER_PAGE]:
+        label = f"{sb['name']} {sb['nat']} · #{round(sb['avg_rank'],1)}"
         rows.append([{"text": label, "callback_data": f"biat_vs_{race_id}_{ibu_a}_{ibu_b}"}])
+
+    nav = [{"text": f"1/{total_pages} · {len(top)} athlètes", "callback_data": "noop"}]
+    if total_pages > 1:
+        nav.append({"text": "Suiv. ▶️", "callback_data": f"biat_selb_{race_id}_{ibu_a}_1"})
+    rows.append(nav)
     rows.append([{"text": "◀️ Rechoisir A", "callback_data": f"biat_h2h_{race_id}"}])
 
     kb = make_keyboard(rows)
@@ -305,7 +313,51 @@ def handle_duel(race_id: str, ibu_a: str, ibu_b: str, chat_id: str):
     send_message(msg, reply_markup=kb)
 
 
-def handle_podium(race_id: str):
+def handle_select_b_page(race_id: str, ibu_a: str, page: int, chat_id: str):
+    """Page suivante pour choisir l'adversaire B."""
+    from core.telegram import send_message, make_keyboard
+
+    sess  = _session.get(chat_id, {})
+    stats = sess.get("stats") if sess.get("race_id") == race_id else None
+    desc  = sess.get("desc","") if sess else ""
+
+    if not stats:
+        from sports.biathlon.biathlon_client import get_upcoming_races, preload_competitions, CURRENT_SEASON
+        preload_competitions(CURRENT_SEASON)
+        races  = get_upcoming_races(days_ahead=7)
+        race   = next((r for r in races if r.get("race_id") == race_id), {})
+        stats  = _build_stats(race.get("gender","M"), race.get("format","SP"), n=10)
+        desc   = race.get("description","")
+
+    sa   = stats.get(ibu_a, {})
+    name_a = sa.get("name", ibu_a)
+    top  = [(ibu, s) for ibu, s in sorted(stats.items(), key=lambda x: x[1]["avg_rank"]) if ibu != ibu_a]
+
+    PER_PAGE    = 10
+    total_pages = math.ceil(len(top) / PER_PAGE)
+    slice_      = top[page*PER_PAGE:(page+1)*PER_PAGE]
+
+    rows = []
+    for ibu_b, sb in slice_:
+        label = f"{sb['name']} {sb['nat']} · #{round(sb['avg_rank'],1)}"
+        rows.append([{"text": label, "callback_data": f"biat_vs_{race_id}_{ibu_a}_{ibu_b}"}])
+
+    nav = []
+    if page > 0:
+        nav.append({"text": "◀️ Préc.", "callback_data": f"biat_selb_{race_id}_{ibu_a}_{page-1}"})
+    nav.append({"text": f"{page+1}/{total_pages}", "callback_data": "noop"})
+    if page < total_pages - 1:
+        nav.append({"text": "Suiv. ▶️", "callback_data": f"biat_selb_{race_id}_{ibu_a}_{page+1}"})
+    rows.append(nav)
+    rows.append([{"text": "◀️ Rechoisir A", "callback_data": f"biat_h2h_{race_id}"}])
+
+    kb = make_keyboard(rows)
+    send_message(
+        f"🎿 <b>{desc}</b>\n"
+        f"⚔️ <b>{name_a}</b> vs ...\n"
+        f"<i>page {page+1}/{total_pages} · {len(top)} athlètes</i>",
+        reply_markup=kb
+    )
     """Podium — top 8 favoris de la course."""
     from core.telegram import send_message, make_keyboard
     from sports.biathlon.biathlon_client import get_upcoming_races, preload_competitions, CURRENT_SEASON
