@@ -107,6 +107,17 @@ def _fd_get(url: str, params: dict = None, retries: int = 3) -> dict:
 ODDS_API_BASE     = "https://api.the-odds-api.com/v4"
 FOOTBALLDATA_BASE = "https://api.football-data.org/v4"
 
+# Rate limiter The Odds API — max ~1 req/sec pour éviter les 429
+_odds_last_call: float = 0.0
+ODDS_MIN_INTERVAL = 1.2  # secondes entre chaque appel
+
+def _odds_rate_limit():
+    global _odds_last_call
+    elapsed = time.time() - _odds_last_call
+    if elapsed < ODDS_MIN_INTERVAL:
+        time.sleep(ODDS_MIN_INTERVAL - elapsed)
+    _odds_last_call = time.time()
+
 LEAGUE_SPORT_MAP = {
     39:  "soccer_epl",
     61:  "soccer_france_ligue_one",
@@ -269,6 +280,7 @@ def get_fixtures(league_id: int, season: int, days_ahead: int = 10) -> list:
         "oddsFormat": "decimal",
     }
     try:
+        _odds_rate_limit()
         resp = requests.get(url, params=params, timeout=15)
         resp.raise_for_status()
         _update_odds_quota(resp.headers)
@@ -321,6 +333,7 @@ def get_odds(league_id: int) -> list:
         "oddsFormat": "decimal",
     }
     try:
+        _odds_rate_limit()
         resp = requests.get(url, params=params, timeout=15)
         resp.raise_for_status()
         _update_odds_quota(resp.headers)
