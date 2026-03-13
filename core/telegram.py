@@ -147,6 +147,9 @@ def send_menu_biathlon():
             {"text": "⚡ Lancer analyse",     "callback_data": "biat_run"},
         ],
         [
+            {"text": "⚔️ H2H interactif",    "callback_data": "biat_h2h_menu"},
+        ],
+        [
             {"text": "🏆 Résultats",  "callback_data": "biat_results"},
             {"text": "📊 Stats",      "callback_data": "biat_stats"},
         ],

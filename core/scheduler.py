@@ -94,6 +94,35 @@ def handle_callback(callback_query: dict):
     elif data == "biat_stats":
         from sports.biathlon.handlers import handle_stats
         threading.Thread(target=handle_stats, daemon=True).start()
+    elif data == "biat_h2h_menu":
+        from sports.biathlon.handlers import handle_h2h_menu
+        threading.Thread(target=handle_h2h_menu, daemon=True).start()
+    elif data.startswith("biat_race_"):
+        race_id = data[len("biat_race_"):]
+        from sports.biathlon.handlers import handle_race_menu
+        threading.Thread(target=handle_race_menu, args=(race_id,), daemon=True).start()
+    elif data.startswith("biat_h2hp_"):          # page athlètes
+        parts = data.split("_"); page = int(parts[-1]); rid = "_".join(parts[2:-1])
+        from sports.biathlon.handlers import handle_h2h_athletes
+        threading.Thread(target=handle_h2h_athletes, args=(rid, page, chat_id), daemon=True).start()
+    elif data.startswith("biat_h2h_"):           # page 0
+        race_id = data[len("biat_h2h_"):]
+        from sports.biathlon.handlers import handle_h2h_athletes
+        threading.Thread(target=handle_h2h_athletes, args=(race_id, 0, chat_id), daemon=True).start()
+    elif data.startswith("biat_sel_"):
+        parts = data[len("biat_sel_"):].split("_", 1)
+        race_id, ibu_a = parts[0], parts[1]
+        from sports.biathlon.handlers import handle_select_a
+        threading.Thread(target=handle_select_a, args=(race_id, ibu_a, chat_id), daemon=True).start()
+    elif data.startswith("biat_vs_"):
+        parts = data[len("biat_vs_"):].split("_", 2)
+        race_id, ibu_a, ibu_b = parts[0], parts[1], parts[2]
+        from sports.biathlon.handlers import handle_duel
+        threading.Thread(target=handle_duel, args=(race_id, ibu_a, ibu_b, chat_id), daemon=True).start()
+    elif data.startswith("biat_pod_"):
+        race_id = data[len("biat_pod_"):]
+        from sports.biathlon.handlers import handle_podium
+        threading.Thread(target=handle_podium, args=(race_id,), daemon=True).start()
 
     # ── Global ──
     elif data == "stats_global":
@@ -119,7 +148,7 @@ def handle_start():
 def handle_global_stats():
     """Stats combinées foot + biathlon."""
     from core.telegram import send_message
-    from database import get_stats
+    from core.database import get_stats
 
     stats = get_stats()
     o     = stats["overall"]
@@ -135,7 +164,7 @@ def handle_global_stats():
 
     # Biathlon si dispo
     try:
-        from database import get_connection, row_to_dict
+        from core.database import get_connection, row_to_dict
         conn = get_connection()
         cur  = conn.cursor()
         cur.execute("""
@@ -287,7 +316,7 @@ def telegram_polling():
 
 def run_scheduler():
     from apscheduler.schedulers.blocking import BlockingScheduler
-    from database import init_db
+    from core.database import init_db
     from core.telegram import send_message
     from sports.football.jobs import (
         refresh_team_stats, smart_run, check_results as foot_results,
