@@ -11,7 +11,7 @@ log = logging.getLogger(__name__)
 
 
 def handle_bets():
-    from database import get_unique_bets
+    from core.database import get_unique_bets
     from core.telegram import send_message, send_menu_foot
 
     bets    = get_unique_bets(limit=200)
@@ -28,10 +28,14 @@ def handle_bets():
 
     def fmt(b):
         bn = " 🔥" if b.get("bete_noire") else ""
+        market = b.get("market", "")
+        bk     = b.get("bookmaker", "")
+        mkt_tag = f" · <i>{market}</i>" if market not in ("Home Win", "Away Win", "Draw") else ""
+        bk_tag  = f" · {bk}" if bk else ""
         return (
-            f"  <b>{b['home_team']} vs {b['away_team']}</b>{bn}\n"
+            f"  <b>{b['home_team']} vs {b['away_team']}</b>{bn}{mkt_tag}\n"
             f"  📅 {b['match_date']} · {b.get('league', '')}"
-            f" · @ <b>{b['bk_odds']}</b> · +{b['value']*100:.1f}% · {b['probability']*100:.0f}%\n"
+            f"{bk_tag} · @ <b>{b['bk_odds']}</b> · +{b['value']*100:.1f}% · {b['probability']*100:.0f}%\n"
         )
 
     msg = f"⏳ <b>Paris en attente — {len(pending)} sélections</b>\n"
@@ -51,7 +55,7 @@ def handle_bets():
 
 
 def handle_today():
-    from database import get_unique_bets
+    from core.database import get_unique_bets
     from core.telegram import send_message
 
     today      = datetime.now(timezone.utc).date().isoformat()
@@ -90,7 +94,7 @@ def handle_today():
 
 
 def handle_stats():
-    from database import get_stats, get_stats_by_market, get_stats_by_league_detailed, get_streak
+    from core.database import get_stats, get_stats_by_market, get_stats_by_league_detailed, get_streak
     from core.telegram import send_message
 
     stats     = get_stats()
@@ -132,7 +136,7 @@ def handle_stats():
 
 
 def handle_pourcent():
-    from database import get_stats
+    from core.database import get_stats
     from core.telegram import send_message
 
     o       = get_stats()["overall"]
@@ -178,14 +182,14 @@ def handle_results():
 
 
 def handle_reset():
-    from database import reset_all_bets
+    from core.database import reset_all_bets
     from core.telegram import send_message
     count = reset_all_bets()
     send_message(f"🗑 <b>Reset effectué</b> — {count} paris supprimés.")
 
 
 def handle_api():
-    from api_clients import get_odds_quota
+    from core.api_clients import get_odds_quota
     from core.telegram import send_message
     from sports.football.jobs import LEAGUES
 
@@ -240,7 +244,7 @@ def handle_status():
 
 
 def handle_h2h():
-    from database import get_h2h_cache_status
+    from core.database import get_h2h_cache_status
     from core.telegram import send_message
     from sports.football.jobs import LEAGUE_NAMES
     from collections import defaultdict
@@ -270,7 +274,7 @@ def handle_h2h():
 def handle_refresh_h2h():
     from core.telegram import send_message
     import database as db_module
-    from api_clients import clear_h2h_cache, prefetch_season_matches, FOOTBALLDATA_LEAGUE_MAP
+    from core.api_clients import clear_h2h_cache, prefetch_season_matches, FOOTBALLDATA_LEAGUE_MAP
     from sports.football.jobs import LEAGUES, SEASON
 
     send_message("🔄 <b>Refresh H2H démarré...</b>")
