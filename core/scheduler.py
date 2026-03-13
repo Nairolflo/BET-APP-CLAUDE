@@ -33,6 +33,7 @@ def handle_callback(callback_query: dict):
 
     cid      = callback_query.get("id", "")
     data     = callback_query.get("data", "")
+    log.info(f"[Callback] data={repr(data)}")
     chat_id  = str(callback_query.get("message", {}).get("chat", {}).get("id", ""))
     msg_id   = callback_query.get("message", {}).get("message_id")
 
