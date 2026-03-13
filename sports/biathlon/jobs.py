@@ -217,6 +217,17 @@ def run(silent=False):
 
         msg = "🎿 <b>Biathlon — H2H par course</b>\n\n"
 
+        # Récupère les cotes Winamax via WebSocket (best effort, 15s)
+        log.info("[Biathlon] Connexion WebSocket Winamax...")
+        try:
+            from sports.biathlon.winamax_ws_client import fetch_biathlon_odds, get_winamax_odd_for
+            fetch_biathlon_odds(timeout=15)
+            _winamax_available = True
+        except Exception as e:
+            log.warning(f"[Biathlon] WebSocket Winamax indisponible : {e}")
+            _winamax_available = False
+            def get_winamax_odd_for(a, b): return None
+
         # Cache stats par (gender, fmt) pour ne pas recalculer
         stats_cache = {}
 
@@ -258,11 +269,26 @@ def run(silent=False):
                 fa = round(1/pa, 2)  # cote juste A
                 fb = round(1/pb, 2)  # cote juste B
 
+                # Cotes Winamax réelles si dispo
+                wm = get_winamax_odd_for(sa["name"], sb["name"])
+                if wm:
+                    wm_a = wm.get("home_odd", wm.get("home", 0))
+                    wm_b = wm.get("away_odd", wm.get("away", 0))
+                    val_a = (pa * wm_a - 1) if wm_a > 1 else 0
+                    val_b = (pb * wm_b - 1) if wm_b > 1 else 0
+                    vbet_a = f" ✅ +{val_a*100:.1f}%" if val_a > VALUE_THRESHOLD else ""
+                    vbet_b = f" ✅ +{val_b*100:.1f}%" if val_b > VALUE_THRESHOLD else ""
+                    odds_line = (
+                        f"  💰 Winamax : <b>{wm_a}</b>{vbet_a} / {wm_b}{vbet_b}"
+                        f"  (c.j. {fa} / {fb})\n"
+                    )
+                else:
+                    odds_line = f"  💰 Cote juste modèle : {fa} / {fb}\n"
+
                 msg += (
                     f"  <b>{sa['name']}</b> {sa['nat']} <b>{round(pa*100)}%</b>"
-                    f" (c.j. {fa})\n"
-                    f"  vs <b>{sb['name']}</b> {sb['nat']} {round(pb*100)}%"
-                    f" (c.j. {fb})\n"
+                    f" vs <b>{sb['name']}</b> {sb['nat']} {round(pb*100)}%\n"
+                    + odds_line +
                     f"  🎯 C:{round(sa['prone_acc']*100)}%/D:{round(sa['standing_acc']*100)}%"
                     f" vs C:{round(sb['prone_acc']*100)}%/D:{round(sb['standing_acc']*100)}%"
                     f"  · {sa['n_races']} vs {sb['n_races']} courses\n\n"
@@ -276,7 +302,10 @@ def run(silent=False):
                     "prob_model": round(pa, 4),
                 })
 
-        msg += "💡 <i>c.j. = cote juste modèle IBU · Comparer sur Winamax</i>"
+        if _winamax_available:
+            msg += "💡 <i>✅ = value bet détecté vs cotes Winamax réelles · c.j. = cote juste modèle IBU</i>"
+        else:
+            msg += "💡 <i>c.j. = cote juste modèle IBU · Comparer manuellement sur Winamax</i>"
 
         state["last_run"] = datetime.now(timezone.utc)
         if not silent: send_message(msg)
