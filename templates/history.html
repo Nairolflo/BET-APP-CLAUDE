@@ -70,6 +70,7 @@
                         +{{ "%.1f"|format((b.value or 0) * 100) }}%
                     </td>
                     <td>
+                        <div style="display:flex;align-items:center;gap:.4rem;">
                         {% if b.success == 1 %}
                             <span class="badge badge-win">✅ Gagné</span>
                         {% elif b.success == 0 %}
@@ -77,6 +78,12 @@
                         {% else %}
                             <span class="badge badge-pending">⏳</span>
                         {% endif %}
+                        <div class="result-btns" style="display:flex;gap:.25rem;opacity:0;transition:opacity .2s">
+                            <button onclick="setResult({{ b.id }}, 1,  this)" title="Marquer Gagné"  style="background:#00c47722;border:1px solid #00c47766;color:#00c477;border-radius:5px;padding:.15rem .4rem;cursor:pointer;font-size:.75rem">✅</button>
+                            <button onclick="setResult({{ b.id }}, 0,  this)" title="Marquer Perdu"  style="background:#ff4d6d22;border:1px solid #ff4d6d66;color:#ff4d6d;border-radius:5px;padding:.15rem .4rem;cursor:pointer;font-size:.75rem">❌</button>
+                            <button onclick="setResult({{ b.id }}, -1, this)" title="Remettre en attente" style="background:#8b8fa822;border:1px solid #8b8fa866;color:#8b8fa8;border-radius:5px;padding:.15rem .4rem;cursor:pointer;font-size:.75rem">⏳</button>
+                        </div>
+                        </div>
                     </td>
                 </tr>
                 {% endfor %}
@@ -116,5 +123,40 @@ function filterTable() {
     document.getElementById(id).addEventListener('input', filterTable));
 document.getElementById('filter-bn').addEventListener('change', filterTable);
 filterTable();
+// Correction manuelle résultat
+async function setResult(betId, result, btn) {
+  const labels = {1: '✅ Gagné', 0: '❌ Perdu', '-1': '⏳'};
+  try {
+    const res = await fetch(`/api/bets/${betId}/result`, {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({result})
+    });
+    if (!res.ok) throw new Error(await res.text());
+    // Met à jour le badge visuellement
+    const td   = btn.closest('td');
+    const badge = td.querySelector('.badge');
+    if (badge) {
+      badge.className = result === 1 ? 'badge badge-win' : result === 0 ? 'badge badge-loss' : 'badge badge-pending';
+      badge.textContent = labels[result];
+    }
+    // Met à jour data-success sur la ligne
+    btn.closest('tr').dataset.success = result;
+  } catch(e) {
+    alert('Erreur : ' + e.message);
+  }
+}
+
+// Affiche les boutons au survol de la ligne
+document.querySelectorAll('tbody tr').forEach(tr => {
+  tr.addEventListener('mouseenter', () => {
+    const btns = tr.querySelector('.result-btns');
+    if (btns) btns.style.opacity = '1';
+  });
+  tr.addEventListener('mouseleave', () => {
+    const btns = tr.querySelector('.result-btns');
+    if (btns) btns.style.opacity = '0';
+  });
+});
 </script>
 {% endblock %}

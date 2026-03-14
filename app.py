@@ -11,6 +11,7 @@ from database import (
     init_db, get_unique_bets, get_stats,
     get_stats_by_market, get_stats_by_league_detailed,
     get_bete_noire_bets, get_roi_over_time, get_streak,
+    update_bet_result,
 )
 
 app = Flask(__name__)
@@ -227,3 +228,16 @@ def api_biathlon_podium():
         return jsonify({"podium": podium})
     except Exception as e:
         return jsonify({"podium": [], "error": str(e)}), 500
+
+@app.route("/api/bets/<int:bet_id>/result", methods=["POST"])
+def api_update_bet_result(bet_id):
+    """Correction manuelle d'un résultat : 1=gagné, 0=perdu, -1=en attente."""
+    data   = request.get_json(silent=True) or {}
+    result = data.get("result")
+    if result not in (0, 1, -1):
+        return jsonify({"error": "result doit être 0, 1 ou -1"}), 400
+    try:
+        update_bet_result(bet_id, result)
+        return jsonify({"ok": True, "bet_id": bet_id, "result": result})
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
