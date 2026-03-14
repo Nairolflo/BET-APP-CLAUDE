@@ -315,16 +315,32 @@ def check_results(silent=False):
                 all_results.update(get_fixtures_results_batch(lid, SEASON, match_date))
 
         for bet in bets:
-            result = next(
-                (r for (h, a), r in all_results.items()
-                 if fuzzy(bet["home_team"], h) and fuzzy(bet["away_team"], a)),
-                None
-            )
+            # Cherche match normal (home=home, away=away)
+            result   = None
+            inverted = False
+            for (h, a), r in all_results.items():
+                if fuzzy(bet["home_team"], h) and fuzzy(bet["away_team"], a):
+                    result = r
+                    break
+            # Fallback : football-data inverse parfois home/away
+            if not result:
+                for (h, a), r in all_results.items():
+                    if fuzzy(bet["home_team"], a) and fuzzy(bet["away_team"], h):
+                        result   = r
+                        inverted = True
+                        break
             if not result:
                 continue
 
-            hg, ag, total = result["home_goals"], result["away_goals"], result["total_goals"]
-            market  = bet["market"]
+            # Si inversé, on swap les buts
+            if inverted:
+                hg = result["away_goals"]
+                ag = result["home_goals"]
+            else:
+                hg = result["home_goals"]
+                ag = result["away_goals"]
+            total  = hg + ag
+            market = bet["market"]
             success = None
 
             if market == "Home Win":    success = 1 if hg > ag else 0
