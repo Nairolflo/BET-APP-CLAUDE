@@ -352,8 +352,8 @@ def run_scheduler():
     scheduler.add_job(foot_results,       "cron", hour=23, minute=0,  id="foot_results",  kwargs={"silent": False})
 
     # ── Jobs biathlon ──
-    scheduler.add_job(biat_run,     "cron", hour=ANALYSIS_HOUR, minute=30, id="biat_run",     kwargs={"silent": False})
-    scheduler.add_job(biat_results, "cron", hour=RESULTS_HOUR,  minute=0,  id="biat_results", kwargs={"silent": False})
+#     scheduler.add_job(biat_run,     "cron", hour=ANALYSIS_HOUR, minute=30, id="biat_run",     kwargs={"silent": False})
+#     scheduler.add_job(biat_results, "cron", hour=RESULTS_HOUR,  minute=0,  id="biat_results", kwargs={"silent": False})
 
     log.info(f"⏰ Foot: refresh 06h · analyse {SCHEDULER_HOUR:02d}h · résultats 23h UTC")
     log.info(f"⏰ Biathlon: analyse {ANALYSIS_HOUR:02d}h30 · résultats {RESULTS_HOUR:02d}h UTC")
