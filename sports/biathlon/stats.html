@@ -1,0 +1,150 @@
+{% extends "base.html" %}
+{% block title %}Stats Biathlon — ValueBet{% endblock %}
+{% block content %}
+<style>
+  .bstat-wrap { max-width: 1000px; margin: 0 auto; padding: 2rem; font-family: 'Inter', sans-serif; }
+  .bstat-header { display: flex; align-items: center; gap: 1rem; margin-bottom: 2rem; }
+  .bstat-header h1 { font-size: 2rem; font-weight: 800; }
+  .tag { background: #00d4aa22; color: #00d4aa; border: 1px solid #00d4aa44; border-radius: 6px; padding: .2rem .7rem; font-size: .75rem; font-weight: 700; text-transform: uppercase; }
+
+  .kpi-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(160px, 1fr)); gap: 1rem; margin-bottom: 2rem; }
+  .kpi { background: var(--surface); border: 1px solid var(--border); border-radius: 12px; padding: 1.2rem; text-align: center; }
+  .kpi .val { font-size: 2rem; font-weight: 800; font-family: 'Bebas Neue', sans-serif; }
+  .kpi .lbl { font-size: .75rem; color: var(--text-dim); margin-top: .3rem; text-transform: uppercase; letter-spacing: 1px; }
+  .kpi.green .val { color: #00d4aa; }
+  .kpi.purple .val { color: #6c63ff; }
+  .kpi.red .val { color: #ff4d6d; }
+  .kpi.yellow .val { color: #ffd166; }
+
+  .section-title { font-size: 1.1rem; font-weight: 700; margin: 2rem 0 1rem; display: flex; align-items: center; gap: .5rem; }
+
+  .race-table { width: 100%; border-collapse: collapse; }
+  .race-table th { text-align: left; font-size: .75rem; text-transform: uppercase; letter-spacing: 1px; color: var(--text-dim); padding: .6rem .8rem; border-bottom: 1px solid var(--border); }
+  .race-table td { padding: .7rem .8rem; border-bottom: 1px solid var(--border); font-size: .88rem; }
+  .race-table tr:hover td { background: var(--surface2); }
+
+  .badge-win  { background:#00d4aa22; color:#00d4aa; border:1px solid #00d4aa44; border-radius:5px; padding:.15rem .5rem; font-size:.75rem; }
+  .badge-loss { background:#ff4d6d22; color:#ff4d6d; border:1px solid #ff4d6d44; border-radius:5px; padding:.15rem .5rem; font-size:.75rem; }
+  .badge-pend { background:#8b8fa822; color:#8b8fa8; border:1px solid #8b8fa844; border-radius:5px; padding:.15rem .5rem; font-size:.75rem; }
+
+  .bar-wrap { background: var(--surface2); border-radius: 4px; height: 6px; overflow: hidden; margin-top: .3rem; }
+  .bar-fill { height: 100%; border-radius: 4px; background: linear-gradient(to right, #6c63ff, #00d4aa); transition: width .6s ease; }
+
+  .empty { color: var(--text-dim); text-align: center; padding: 3rem; }
+  .loader { display: flex; align-items: center; gap: .8rem; color: var(--text-dim); padding: 2rem; justify-content: center; }
+  .spinner { width: 20px; height: 20px; border: 2px solid var(--border); border-top-color: #6c63ff; border-radius: 50%; animation: spin .7s linear infinite; }
+  @keyframes spin { to { transform: rotate(360deg); } }
+</style>
+
+<div class="bstat-wrap">
+  <div class="bstat-header">
+    <h1>🎿 Stats Biathlon</h1>
+    <span class="tag">H2H</span>
+  </div>
+
+  <div id="loader" class="loader"><div class="spinner"></div> Chargement...</div>
+  <div id="content" style="display:none">
+
+    <!-- KPIs globaux -->
+    <div class="kpi-grid" id="kpis"></div>
+
+    <!-- Par course -->
+    <div class="section-title">📅 Par course</div>
+    <div style="overflow-x:auto">
+      <table class="race-table">
+        <thead>
+          <tr>
+            <th>Course</th><th>Format</th><th>Date</th>
+            <th>Paris</th><th>Gagnés</th><th>Perdus</th><th>En attente</th><th>Taux</th>
+          </tr>
+        </thead>
+        <tbody id="race-rows"></tbody>
+      </table>
+    </div>
+
+    <!-- Détail paris -->
+    <div class="section-title">⚔️ Tous les paris H2H</div>
+    <div style="overflow-x:auto">
+      <table class="race-table">
+        <thead>
+          <tr><th>Course</th><th>Duel</th><th>Cote juste</th><th>Proba</th><th>Résultat</th></tr>
+        </thead>
+        <tbody id="bet-rows"></tbody>
+      </table>
+    </div>
+
+  </div>
+</div>
+
+<script>
+async function load() {
+  try {
+    const res  = await fetch('/api/biathlon/stats');
+    const data = await res.json();
+
+    document.getElementById('loader').style.display = 'none';
+    document.getElementById('content').style.display = 'block';
+
+    // KPIs
+    const s = data.summary;
+    const wr = s.resolved > 0 ? Math.round(s.won / s.resolved * 100) : 0;
+    document.getElementById('kpis').innerHTML = `
+      <div class="kpi purple"><div class="val">${s.total}</div><div class="lbl">Paris total</div></div>
+      <div class="kpi green"><div class="val">${s.won}</div><div class="lbl">Gagnés</div></div>
+      <div class="kpi red"><div class="val">${s.lost}</div><div class="lbl">Perdus</div></div>
+      <div class="kpi yellow"><div class="val">${s.pending}</div><div class="lbl">En attente</div></div>
+      <div class="kpi ${wr >= 55 ? 'green' : wr >= 45 ? 'yellow' : 'red'}">
+        <div class="val">${wr}%</div><div class="lbl">Taux réussite</div>
+        <div class="bar-wrap"><div class="bar-fill" style="width:${wr}%"></div></div>
+      </div>`;
+
+    // Par course
+    const tbody = document.getElementById('race-rows');
+    if (!data.by_race.length) {
+      tbody.innerHTML = '<tr><td colspan="8" class="empty">Aucune donnée</td></tr>';
+    } else {
+      tbody.innerHTML = data.by_race.map(r => {
+        const resolved = r.won + r.lost;
+        const wr = resolved > 0 ? Math.round(r.won / resolved * 100) : null;
+        return `<tr>
+          <td>${r.race_name}</td>
+          <td><span style="font-size:.75rem;background:#6c63ff22;color:#6c63ff;border:1px solid #6c63ff44;border-radius:4px;padding:.1rem .4rem">${r.race_format}</span></td>
+          <td style="color:var(--text-dim)">${r.race_date}</td>
+          <td><strong>${r.total}</strong></td>
+          <td style="color:#00d4aa">${r.won}</td>
+          <td style="color:#ff4d6d">${r.lost}</td>
+          <td style="color:#8b8fa8">${r.pending}</td>
+          <td>${wr !== null
+            ? `<div>${wr}%</div><div class="bar-wrap"><div class="bar-fill" style="width:${wr}%"></div></div>`
+            : '<span style="color:var(--text-dim)">—</span>'
+          }</td>
+        </tr>`;
+      }).join('');
+    }
+
+    // Détail paris
+    const betBody = document.getElementById('bet-rows');
+    if (!data.bets.length) {
+      betBody.innerHTML = '<tr><td colspan="5" class="empty">Aucun paris enregistré</td></tr>';
+    } else {
+      betBody.innerHTML = data.bets.map(b => `<tr>
+        <td style="color:var(--text-dim);font-size:.8rem">${b.race_name}<br><span style="font-size:.72rem">${b.race_date}</span></td>
+        <td><strong>${b.pick}</strong> vs ${b.opponent}</td>
+        <td style="color:#ffd166">${b.odd > 0 ? b.odd : '—'}</td>
+        <td>${b.prob_model > 0 ? Math.round(b.prob_model * 100) + '%' : '—'}</td>
+        <td>${b.result === 1
+          ? '<span class="badge-win">✅ Gagné</span>'
+          : b.result === 0
+          ? '<span class="badge-loss">❌ Perdu</span>'
+          : '<span class="badge-pend">⏳</span>'
+        }</td>
+      </tr>`).join('');
+    }
+
+  } catch(e) {
+    document.getElementById('loader').innerHTML = `<p style="color:#ff4d6d">❌ Erreur : ${e.message}</p>`;
+  }
+}
+load();
+</script>
+{% endblock %}

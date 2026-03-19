@@ -300,7 +300,8 @@
 
         <div class="nav-sep"></div>
         <span class="nav-section biathl">🎿 BIATHLON</span>
-        <a href="/biathlon"        {% if request.path == '/biathlon' %}class="active-biathl"{% endif %}>Live</a>
+        <a href="/biathlon" {% if request.path == '/biathlon' %}class="active-biathl"{% endif %}>H2H</a>
+        <a href="/biathlon/stats" {% if request.path == '/biathlon/stats' %}class="active-biathl"{% endif %}>Stats</a>
         
         
         

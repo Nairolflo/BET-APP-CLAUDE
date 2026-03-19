@@ -273,3 +273,46 @@ def api_watchlist_add():
 def api_watchlist_delete(item_id):
     delete_biathlon_watchlist(item_id)
     return jsonify({"ok": True})
+
+@app.route("/biathlon/stats")
+def biathlon_stats_page():
+    return render_template("biathlon_stats.html")
+
+@app.route("/api/biathlon/stats")
+def api_biathlon_stats():
+    from database import get_connection, rows_to_dicts
+    conn = get_connection()
+    try:
+        cur = conn.cursor()
+        cur.execute("SELECT * FROM biathlon_bets ORDER BY race_date DESC, id DESC")
+        bets = rows_to_dicts(cur, cur.fetchall())
+    finally:
+        conn.close()
+
+    total   = len(bets)
+    won     = sum(1 for b in bets if b["result"] == 1)
+    lost    = sum(1 for b in bets if b["result"] == 0)
+    pending = sum(1 for b in bets if b["result"] == -1)
+
+    # Par course
+    from collections import defaultdict
+    races = defaultdict(lambda: {"won":0,"lost":0,"pending":0,"race_name":"","race_date":"","race_format":""})
+    for b in bets:
+        k = b["race_id"]
+        races[k]["race_name"]   = b.get("race_name","")
+        races[k]["race_date"]   = b.get("race_date","")
+        races[k]["race_format"] = b.get("race_format","")
+        if   b["result"] == 1:  races[k]["won"]     += 1
+        elif b["result"] == 0:  races[k]["lost"]    += 1
+        else:                   races[k]["pending"]  += 1
+
+    by_race = sorted([
+        {"race_id": k, **v, "total": v["won"]+v["lost"]+v["pending"]}
+        for k, v in races.items()
+    ], key=lambda x: x["race_date"], reverse=True)
+
+    return jsonify({
+        "summary": {"total": total, "won": won, "lost": lost, "pending": pending, "resolved": won+lost},
+        "by_race": by_race,
+        "bets":    bets,
+    })

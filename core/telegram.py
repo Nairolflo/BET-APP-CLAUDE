@@ -144,7 +144,6 @@ def send_menu_biathlon():
     keyboard = make_keyboard([
         [
             {"text": "📋 Statut courses",    "callback_data": "biat_status"},
-            {"text": "⚡ Lancer analyse",     "callback_data": "biat_run"},
         ],
         [
             {"text": "⚔️ H2H interactif",    "callback_data": "biat_h2h_menu"},
