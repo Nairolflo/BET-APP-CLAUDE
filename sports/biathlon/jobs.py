@@ -443,13 +443,7 @@ def run(silent=False):
                     f"  · {sa['n_races']} vs {sb['n_races']} courses\n\n"
                 )
 
-                save_bet({
-                    "race_id":    race_id, "race_name": desc,
-                    "race_date":  date,    "race_format": fmt,
-                    "bet_type":   "H2H",   "pick": sa["name"],
-                    "opponent":   sb["name"], "odd": fa,
-                    "prob_model": round(pa, 4),
-                })
+
 
         msg += "💡 <i>c.j. = cote juste modèle IBU · Comparer sur Winamax</i>"
 

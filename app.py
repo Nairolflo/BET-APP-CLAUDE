@@ -280,39 +280,30 @@ def biathlon_stats_page():
 
 @app.route("/api/biathlon/stats")
 def api_biathlon_stats():
-    from database import get_connection, rows_to_dicts
-    conn = get_connection()
-    try:
-        cur = conn.cursor()
-        cur.execute("SELECT * FROM biathlon_bets ORDER BY race_date DESC, id DESC")
-        bets = rows_to_dicts(cur, cur.fetchall())
-    finally:
-        conn.close()
-
-    total   = len(bets)
-    won     = sum(1 for b in bets if b["result"] == 1)
-    lost    = sum(1 for b in bets if b["result"] == 0)
-    pending = sum(1 for b in bets if b["result"] == -1)
-
-    # Par course
     from collections import defaultdict
+    bets_raw = get_biathlon_watchlist()
+    total   = len(bets_raw)
+    won     = sum(1 for b in bets_raw if b.get("result") == 1)
+    lost    = sum(1 for b in bets_raw if b.get("result") == 0)
+    pending = sum(1 for b in bets_raw if b.get("result", -1) == -1)
     races = defaultdict(lambda: {"won":0,"lost":0,"pending":0,"race_name":"","race_date":"","race_format":""})
-    for b in bets:
+    for b in bets_raw:
         k = b["race_id"]
-        races[k]["race_name"]   = b.get("race_name","")
+        races[k]["race_name"]   = b.get("race_desc","")
         races[k]["race_date"]   = b.get("race_date","")
-        races[k]["race_format"] = b.get("race_format","")
-        if   b["result"] == 1:  races[k]["won"]     += 1
-        elif b["result"] == 0:  races[k]["lost"]    += 1
-        else:                   races[k]["pending"]  += 1
-
+        races[k]["race_format"] = b.get("race_fmt","")
+        r = b.get("result", -1)
+        if   r == 1: races[k]["won"]     += 1
+        elif r == 0: races[k]["lost"]    += 1
+        else:        races[k]["pending"] += 1
     by_race = sorted([
         {"race_id": k, **v, "total": v["won"]+v["lost"]+v["pending"]}
         for k, v in races.items()
     ], key=lambda x: x["race_date"], reverse=True)
-
-    return jsonify({
-        "summary": {"total": total, "won": won, "lost": lost, "pending": pending, "resolved": won+lost},
-        "by_race": by_race,
-        "bets":    bets,
-    })
+    bets = [{"id": b["id"], "race_id": b["race_id"],
+        "race_name": b.get("race_desc",""), "race_date": b.get("race_date",""),
+        "race_format": b.get("race_fmt",""), "pick": b.get("name_a",""),
+        "opponent": b.get("name_b",""), "prob_model": 0, "odd": 0,
+        "result": b.get("result", -1)} for b in bets_raw]
+    return jsonify({"summary": {"total": total, "won": won, "lost": lost,
+        "pending": pending, "resolved": won+lost}, "by_race": by_race, "bets": bets})

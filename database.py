@@ -21,6 +21,7 @@ def init_biathlon_watchlist():
                 race_fmt TEXT, race_date TEXT,
                 ibu_a TEXT, name_a TEXT, nat_a TEXT,
                 ibu_b TEXT, name_b TEXT, nat_b TEXT,
+                result INTEGER DEFAULT -1,
                 created_at TIMESTAMP DEFAULT NOW())""")
         else:
             cur.execute("""CREATE TABLE IF NOT EXISTS biathlon_watchlist (
@@ -28,6 +29,7 @@ def init_biathlon_watchlist():
                 race_fmt TEXT, race_date TEXT,
                 ibu_a TEXT, name_a TEXT, nat_a TEXT,
                 ibu_b TEXT, name_b TEXT, nat_b TEXT,
+                result INTEGER DEFAULT -1,
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)""")
         conn.commit()
     finally:
@@ -65,6 +67,16 @@ def get_biathlon_watchlist() -> list:
         cur = conn.cursor()
         cur.execute("SELECT * FROM biathlon_watchlist ORDER BY race_date, race_id")
         return rows_to_dicts(cur, cur.fetchall())
+    finally:
+        conn.close()
+
+
+def update_biathlon_watchlist_result(item_id: int, result: int):
+    conn = get_connection()
+    try:
+        cur = conn.cursor(); p = ph()
+        cur.execute(f"UPDATE biathlon_watchlist SET result={p} WHERE id={p}", (result, item_id))
+        conn.commit()
     finally:
         conn.close()
 
