@@ -398,6 +398,14 @@ async function runDuel() {
         Si Winamax propose une cote &gt; <strong style="color:#00d4aa">${winA ? d.cote_a : d.cote_b}</strong> → value bet ✅
       </div>
     </div>`;
+  const oldSaveBtn = document.getElementById('save-btn');
+  if (oldSaveBtn) oldSaveBtn.remove();
+  document.getElementById('result-container').insertAdjacentHTML('afterend', `
+    <button onclick="saveDuel()" id="save-btn" style="margin-top:1rem;width:100%;max-width:680px;
+      background:#6c63ff22;border:1px solid #6c63ff66;color:#6c63ff;border-radius:10px;
+      padding:.7rem;font-size:.9rem;cursor:pointer;">
+      ⭐ Sauvegarder ce duel pour suivi
+    </button>`);
 }
 
 // ─── Podium ──────────────────────────────────────────────────────────────────
