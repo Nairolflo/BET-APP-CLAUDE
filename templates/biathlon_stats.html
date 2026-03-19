@@ -169,9 +169,7 @@ function betListHtml(bets) {
       <td style="color:var(--text-dim)">${b.opponent}</td>
       <td>${b.prob_model > 0 ? Math.round(b.prob_model*100)+'%' : '—'}</td>
       <td style="color:#ffd166">${b.odd > 0 ? b.odd : '—'}</td>
-      <td>${b.result===1 ? '<span class="badge-win">✅ Gagné</span>'
-          : b.result===0 ? '<span class="badge-loss">❌ Perdu</span>'
-          : '<span class="badge-pend">⏳</span>'}</td>
+      <td id='res-'+b.id><div style='display:flex;gap:.3rem;align-items:center'>${b.result===1?'<span class="badge-win">✅</span>':b.result===0?'<span class="badge-loss">❌</span>':'<span class="badge-pend">⏳</span>'}<button onclick="setWatchResult('+b.id+',1)" style="background:#00d4aa11;border:1px solid #00d4aa33;color:#00d4aa;border-radius:4px;padding:.1rem .3rem;cursor:pointer;font-size:.7rem">✅</button><button onclick="setWatchResult('+b.id+',0)" style="background:#ff4d6d11;border:1px solid #ff4d6d33;color:#ff4d6d;border-radius:4px;padding:.1rem .3rem;cursor:pointer;font-size:.7rem">❌</button><button onclick="setWatchResult('+b.id+',-1)" style="background:#8b8fa811;border:1px solid #8b8fa833;color:#8b8fa8;border-radius:4px;padding:.1rem .3rem;cursor:pointer;font-size:.7rem">⏳</button></div></td>
     </tr>`).join('')}</tbody>
   </table></div>`;
 }
@@ -181,6 +179,14 @@ function renderTab(bets, fmt) {
     kpiHtml(bets) + byRaceHtml(bets) + betListHtml(bets);
 }
 
+
+async function setWatchResult(id, result) {
+  await fetch(`/api/biathlon/watchlist/${id}/result`, {
+    method: 'POST', headers: {'Content-Type':'application/json'},
+    body: JSON.stringify({result})
+  });
+  load();
+}
 load();
 </script>
 {% endblock %}
