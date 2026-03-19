@@ -92,9 +92,6 @@ def handle_callback(callback_query: dict):
     elif data == "biat_results":
         from sports.biathlon.handlers import handle_results
         threading.Thread(target=handle_results, daemon=True).start()
-    elif data == "biat_stats":
-        from sports.biathlon.handlers import handle_stats
-        threading.Thread(target=handle_stats, daemon=True).start()
     elif data == "biat_h2h_menu":
         from sports.biathlon.handlers import handle_h2h_menu
         threading.Thread(target=handle_h2h_menu, daemon=True).start()
@@ -366,6 +363,19 @@ def run_scheduler():
     )
 
     try:
+
+        # Refresh quotidien cache IBU biathlon (6h UTC)
+        def _refresh_biathlon_cache():
+            try:
+                from sports.biathlon.handlers import _stats_cache
+                from sports.biathlon.biathlon_client import preload_competitions, CURRENT_SEASON, PREV_SEASON
+                _stats_cache.clear()
+                preload_competitions(CURRENT_SEASON)
+                preload_competitions(PREV_SEASON)
+                log.info("[Biathlon] Cache IBU rafraîchi")
+            except Exception as e:
+                log.warning(f"[Biathlon] Refresh cache KO: {e}")
+        scheduler.add_job(_refresh_biathlon_cache, "cron", hour=6, minute=0, id="biat_cache_refresh")
         scheduler.start()
     except (KeyboardInterrupt, SystemExit):
         send_message("🛑 <b>Worker arrêté.</b>")

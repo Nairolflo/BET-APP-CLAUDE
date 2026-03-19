@@ -207,6 +207,12 @@
     <button class="back-btn" onclick="goTo(2)">← Nouveau duel</button>
     <div id="result-container"></div>
   </div>
+
+<div style="margin-top:3rem;border-top:1px solid #2e3153;padding-top:2rem">
+  <h2 style="font-family:'Barlow Condensed',sans-serif;font-size:1.4rem;font-weight:800;margin-bottom:1rem">⭐ Duels sauvegardés</h2>
+  <div id="watchlist"><div class="loader"><div class="spinner"></div> Chargement...</div></div>
+</div>
+
 </div>
 
 <script>
@@ -422,9 +428,89 @@ async function loadPodium() {
   document.getElementById('result-container').innerHTML = html;
   // Bouton retour
   document.querySelector('#panel-result .back-btn').onclick = () => goTo(1);
+  document.getElementById('result-container').insertAdjacentHTML('afterend', `
+      <button onclick="saveDuel()" style="
+        margin-top:1rem;width:100%;max-width:680px;
+        background:#6c63ff22;border:1px solid #6c63ff66;
+        color:#6c63ff;border-radius:10px;padding:.7rem;
+        font-size:.9rem;cursor:pointer;transition:all .2s"
+        id="save-btn">
+        ⭐ Sauvegarder ce duel pour suivi
+      </button>`);
+}
+
+
+async function saveDuel() {
+  const btn = document.getElementById('save-btn');
+  btn.disabled = true; btn.textContent = '⏳ Sauvegarde...';
+  try {
+    const res = await fetch('/api/biathlon/watchlist', {
+      method: 'POST',
+      headers: {'Content-Type':'application/json'},
+      body: JSON.stringify({
+        race_id:   state.raceId,
+        race_date: state.raceDate || '',
+        ibu_a:     state.selA.ibu,
+        ibu_b:     state.selB.ibu,
+      })
+    });
+    const d = await res.json();
+    if (d.ok) { btn.textContent = '✅ Sauvegardé !'; btn.style.background='#00d4aa22'; btn.style.borderColor='#00d4aa66'; btn.style.color='#00d4aa'; }
+    else btn.textContent = d.error || 'Déjà sauvegardé';
+  } catch(e) { btn.textContent = '❌ Erreur'; btn.disabled = false; }
+}
+
+async function loadWatchlist() {
+  const res  = await fetch('/api/biathlon/watchlist');
+  const list = await res.json();
+  const div  = document.getElementById('watchlist');
+  if (!list.length) { div.innerHTML = '<p style="color:#8b8fa8">Aucun duel sauvegardé.</p>'; return; }
+  div.innerHTML = list.map(w => `
+    <div style="background:#1a1d2e;border:1px solid #2e3153;border-radius:10px;padding:.9rem 1.2rem;display:flex;align-items:center;gap:1rem;margin-bottom:.5rem">
+      <div style="flex:1">
+        <div style="font-weight:700">${w.name_a} <span style="color:#8b8fa8;font-size:.8rem">${w.nat_a}</span> ⚔️ ${w.name_b} <span style="color:#8b8fa8;font-size:.8rem">${w.nat_b}</span></div>
+        <div style="font-size:.75rem;color:#8b8fa8;margin-top:.2rem">${w.race_desc} · ${w.race_date}</div>
+      </div>
+      <button onclick="reloadDuel('${w.race_id}','${w.ibu_a}','${w.ibu_b}')" style="background:#6c63ff22;border:1px solid #6c63ff44;color:#6c63ff;border-radius:6px;padding:.3rem .7rem;cursor:pointer;font-size:.8rem">🔄 Stats</button>
+      <button onclick="deleteDuel(${w.id}, this)" style="background:#ff4d6d11;border:1px solid #ff4d6d33;color:#ff4d6d;border-radius:6px;padding:.3rem .7rem;cursor:pointer;font-size:.8rem">🗑</button>
+    </div>`).join('');
+}
+
+async function deleteDuel(id, btn) {
+  await fetch(`/api/biathlon/watchlist/${id}`, {method:'DELETE'});
+  btn.closest('div[style]').remove();
+}
+
+async function reloadDuel(raceId, ibuA, ibuB) {
+  goTo(3);
+  document.getElementById('result-container').innerHTML = '<div class="loader"><div class="spinner"></div> Mise à jour stats...</div>';
+  const res = await fetch(`/api/biathlon/duel?race_id=${raceId}&ibu_a=${ibuA}&ibu_b=${ibuB}`);
+  const d   = await res.json();
+  if (d.error) { document.getElementById('result-container').innerHTML = `<p style="color:#ff4d6d">❌ ${d.error}</p>`; return; }
+  // Réutilise runDuel mais avec les données directement
+  state.raceId = raceId;
+  const winA = d.prob_a > d.prob_b;
+  document.getElementById('result-container').innerHTML = `
+    <div class="duel-card">
+      <div class="duel-vs">
+        <div class="duel-athlete ${winA?'winner':'loser'}">
+          <div class="dname">${d.name_a}</div><div class="dnat">${d.nat_a}</div>
+          <div class="dprob">${Math.round(d.prob_a*100)}%</div><div class="dcote">c.j. ${d.cote_a}</div>
+        </div>
+        <div class="vs-sep"><div class="vs">VS</div><div class="bar"></div></div>
+        <div class="duel-athlete ${!winA?'winner':'loser'}">
+          <div class="dname">${d.name_b}</div><div class="dnat">${d.nat_b}</div>
+          <div class="dprob">${Math.round(d.prob_b*100)}%</div><div class="dcote">c.j. ${d.cote_b}</div>
+        </div>
+      </div>
+      <div style="margin-top:.8rem;padding:.7rem 1rem;background:#252840;border-radius:8px;font-size:.82rem;color:#8b8fa8">
+        💡 Favori : <strong style="color:#e8eaf6">${winA?d.name_a:d.name_b}</strong> — cote juste <strong style="color:#00d4aa">${winA?d.cote_a:d.cote_b}</strong>
+      </div>
+    </div>`;
 }
 
 // Init
 loadRaces();
+loadWatchlist();
 </script>
 {% endblock %}

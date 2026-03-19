@@ -151,7 +151,6 @@ def send_menu_biathlon():
         ],
         [
             {"text": "🏆 Résultats",  "callback_data": "biat_results"},
-            {"text": "📊 Stats",      "callback_data": "biat_stats"},
         ],
         [
             {"text": "◀️ Menu principal", "callback_data": "menu_main"},

@@ -11,7 +11,8 @@ from database import (
     init_db, get_unique_bets, get_stats,
     get_stats_by_market, get_stats_by_league_detailed,
     get_bete_noire_bets, get_roi_over_time, get_streak,
-    update_bet_result,
+    update_bet_result, init_biathlon_watchlist,
+    save_biathlon_watchlist, get_biathlon_watchlist, delete_biathlon_watchlist,
 )
 
 app = Flask(__name__)
@@ -19,6 +20,7 @@ app = Flask(__name__)
 @app.before_request
 def setup():
     init_db()
+    init_biathlon_watchlist()
 
 # ─────────────────────────────────────────────
 # PAGES
@@ -241,3 +243,33 @@ def api_update_bet_result(bet_id):
         return jsonify({"ok": True, "bet_id": bet_id, "result": result})
     except Exception as e:
         return jsonify({"error": str(e)}), 500
+@app.route("/api/biathlon/watchlist", methods=["GET"])
+def api_watchlist_get():
+    return jsonify(get_biathlon_watchlist())
+
+@app.route("/api/biathlon/watchlist", methods=["POST"])
+def api_watchlist_add():
+    d = request.get_json(silent=True) or {}
+    try:
+        # Récupère les infos des athlètes depuis le cache
+        from sports.biathlon.handlers import _get_race_stats
+        cached = _get_race_stats(d.get("race_id",""))
+        stats  = cached["stats"]
+        sa = stats.get(d.get("ibu_a",""), {})
+        sb = stats.get(d.get("ibu_b",""), {})
+        item_id = save_biathlon_watchlist({
+            "race_id":   d.get("race_id",""),
+            "race_desc": cached.get("desc",""),
+            "race_fmt":  cached.get("fmt",""),
+            "race_date": d.get("race_date",""),
+            "ibu_a": d.get("ibu_a",""), "name_a": sa.get("name",""), "nat_a": sa.get("nat",""),
+            "ibu_b": d.get("ibu_b",""), "name_b": sb.get("name",""), "nat_b": sb.get("nat",""),
+        })
+        return jsonify({"ok": True, "id": item_id})
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+@app.route("/api/biathlon/watchlist/<int:item_id>", methods=["DELETE"])
+def api_watchlist_delete(item_id):
+    delete_biathlon_watchlist(item_id)
+    return jsonify({"ok": True})
