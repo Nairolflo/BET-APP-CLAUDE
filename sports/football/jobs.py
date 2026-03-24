@@ -233,8 +233,21 @@ def run(silent=False):
                 except Exception:
                     pass
 
+            # BTTS
+            btts_data = None
+            try:
+                from api_clients import calc_btts_prob
+                btts_data = calc_btts_prob(
+                    home_name, away_name, league_id,
+                    home_form=home_form, away_form=away_form,
+                    match_date=fix["date"]
+                )
+            except Exception as e:
+                log.debug(f"BTTS: {e}")
+
             value_bets = find_value_bets(
-                prediction, odds, VALUE_THRESHOLD, MIN_PROBABILITY, h2h=h2h
+                prediction, odds, VALUE_THRESHOLD, MIN_PROBABILITY,
+                h2h=h2h, btts=btts_data
             )
             match_info = {
                 "date":      fix["date"],
