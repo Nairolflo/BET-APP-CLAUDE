@@ -6,8 +6,8 @@ from flask import Flask, render_template, jsonify, request
 from dotenv import load_dotenv
 load_dotenv()
 
-from api_clients import get_odds_api_usage
-from database import (
+from core.api_clients import get_odds_api_usage
+from core.database import (
     init_db, get_unique_bets, get_stats,
     get_stats_by_market, get_stats_by_league_detailed,
     get_bete_noire_bets, get_roi_over_time, get_streak,
