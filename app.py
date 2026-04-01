@@ -13,6 +13,7 @@ from core.database import (
     get_bete_noire_bets, get_roi_over_time, get_streak,
     update_bet_result, init_biathlon_watchlist,
     save_biathlon_watchlist, get_biathlon_watchlist, delete_biathlon_watchlist,
+    update_biathlon_watchlist_result,
 )
 
 app = Flask(__name__)
@@ -307,3 +308,12 @@ def api_biathlon_stats():
         "result": b.get("result", -1)} for b in bets_raw]
     return jsonify({"summary": {"total": total, "won": won, "lost": lost,
         "pending": pending, "resolved": won+lost}, "by_race": by_race, "bets": bets})
+
+@app.route("/api/biathlon/watchlist/<int:item_id>/result", methods=["POST"])
+def api_watchlist_result(item_id):
+    d = request.get_json(silent=True) or {}
+    result = d.get("result")
+    if result not in (0, 1, -1):
+        return jsonify({"error": "result doit être 0, 1 ou -1"}), 400
+    update_biathlon_watchlist_result(item_id, result)
+    return jsonify({"ok": True})
