@@ -758,7 +758,7 @@ def prefetch_season_matches(league_id: int, seasons: list) -> list:
 
     Plan gratuit FD = 2 saisons récentes max. Les 403 sont ignorés proprement.
     """
-    from database import get_h2h_cache, set_h2h_cache
+    from core.database import get_h2h_cache, set_h2h_cache
 
     competition = FOOTBALLDATA_LEAGUE_MAP.get(league_id)
     cache_key   = f"season_{league_id}_{'_'.join(str(s) for s in seasons)}"
