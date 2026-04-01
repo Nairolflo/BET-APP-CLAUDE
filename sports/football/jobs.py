@@ -139,6 +139,12 @@ def run(silent=False):
     now = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
     log.info(f"VALUE BET ENGINE — {now}")
     if not silent:
+        # Capture quota avant le run pour calculer la consommation
+        try:
+            from core.api_clients import get_odds_quota
+            used_before = get_odds_quota().get("remaining", 0)
+        except Exception:
+            used_before = 0
         send_message(f"🚀 <b>Analyse démarrée</b>\n📅 {now}\n🔍 Calcul en cours...")
 
     new_value_bets = []
@@ -278,10 +284,13 @@ def run(silent=False):
 
     try:
         from core.api_clients import get_odds_api_usage
-        quota      = get_odds_api_usage()
-        remaining  = quota.get("remaining", "?")
-        used_run   = quota.get("used", "?")
-        quota_line = f"\n📡 Quota : <b>{remaining}</b> restantes · <b>{used_run}</b> utilisées ce run"
+        # Utilise le cache _odds_tokens — pas d'appel API supplémentaire
+        from core.api_clients import get_odds_quota
+        quota     = get_odds_quota()
+        remaining = quota.get("remaining", "?")
+        used      = quota.get("used", "?")
+        tokens_run = used_before - quota.get("remaining", used_before) if isinstance(used_before, int) and isinstance(quota.get("remaining"), int) else "?"
+        quota_line = f"\n📡 Quota : <b>{remaining}</b> restantes · <b>{tokens_run}</b> tokens utilisés ce run"
     except Exception:
         quota_line = ""
 
