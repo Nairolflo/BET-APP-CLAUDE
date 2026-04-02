@@ -546,33 +546,44 @@ def delete_today_pending_bets():
         conn.close()
 
 
-def get_unique_bets(limit: int = 200) -> list:
+def get_unique_bets(limit: int = 500) -> list:
     """
-    Retourne les bets sans doublons.
+    Retourne les bets sans doublons, bookmakers FR uniquement.
     Pour chaque combinaison home_team + away_team + market,
     garde uniquement le plus récent.
     """
     conn = get_connection()
     try:
         cur = conn.cursor()
+        # Filtre bookmakers FR
+        fr_filter = """
+            AND (
+                LOWER(bookmaker) LIKE '%winamax%'
+                OR LOWER(bookmaker) LIKE '%betclic%'
+                OR LOWER(bookmaker) LIKE '%unibet%fr%'
+                OR LOWER(bookmaker) = 'unibet'
+            )
+        """
         if is_postgres():
-            cur.execute("""
+            cur.execute(f"""
                 SELECT DISTINCT ON (home_team, away_team, market)
                     id, match_date, league, home_team, away_team,
                     market, bookmaker, bk_odds, model_odds, probability,
                     value, success, notified, created_at
                 FROM bets
+                WHERE 1=1 {fr_filter}
                 ORDER BY home_team, away_team, market, created_at DESC
                 LIMIT %s
             """, (limit,))
         else:
-            cur.execute("""
+            cur.execute(f"""
                 SELECT id, match_date, league, home_team, away_team,
                        market, bookmaker, bk_odds, model_odds, probability,
                        value, success, notified, created_at
                 FROM bets
                 WHERE id IN (
                     SELECT MAX(id) FROM bets
+                    WHERE 1=1 {fr_filter}
                     GROUP BY home_team, away_team, market
                 )
                 ORDER BY created_at DESC
