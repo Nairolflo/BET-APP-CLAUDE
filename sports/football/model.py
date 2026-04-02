@@ -318,7 +318,8 @@ def combine_probabilities(poisson_p: float, market_p: float,
 
 def find_value_bets(predictions: dict, odds: dict,
                     value_threshold: float = 0.02, min_prob: float = 0.55,
-                    poisson_weight: float = 0.40, h2h: dict = None):
+                    poisson_weight: float = 0.40, h2h: dict = None,
+                    btts: dict = None):
     """
     Détecte les value bets de haute qualité.
 
