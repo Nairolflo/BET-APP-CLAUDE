@@ -975,3 +975,15 @@ def get_all_results_today(date: str) -> dict:
 
     print(f"[all_results] {len(results)//2} résultats pour le {date}")
     return results
+def odds_quota_ok(min_remaining: int = 5, required: int = None) -> bool:
+    """Vérifie si le quota Odds API est suffisant pour lancer un run."""
+    quota = get_odds_quota()
+    remaining = quota.get("remaining", 0)
+    if required is not None:
+        return remaining >= required
+    return remaining >= min_remaining
+
+def clear_odds_cache():
+    """Vide le cache des cotes."""
+    global _odds_tokens
+    _odds_tokens = {"remaining": None, "used": None, "last_update": None}
