@@ -1,0 +1,762 @@
+{% extends "base.html" %}
+{% block title %}Stats Marchés — ValueBet Bot{% endblock %}
+{% block content %}
+<style>
+  /* ── THEME TOGGLE ─────────────────────────────────────────────────── */
+  :root {
+    --mk-bg:        var(--bg);
+    --mk-surface:   var(--surface);
+    --mk-surface2:  var(--surface2);
+    --mk-surface3:  var(--surface3);
+    --mk-border:    var(--border);
+    --mk-text:      var(--text);
+    --mk-text-dim:  var(--text-dim);
+    --mk-success:   var(--success);
+    --mk-fail:      var(--fail);
+    --mk-yellow:    var(--yellow);
+    --mk-accent:    var(--accent);
+    --mk-accent2:   var(--accent2);
+    --mk-blue:      var(--blue);
+  }
+
+  body.light-mode {
+    --mk-bg:        #f0f2f8;
+    --mk-surface:   #ffffff;
+    --mk-surface2:  #f5f6fa;
+    --mk-surface3:  #eaecf4;
+    --mk-border:    #d8dae8;
+    --mk-text:      #1a1d2e;
+    --mk-text-dim:  #7b7fa8;
+    --mk-success:   #059669;
+    --mk-fail:      #dc2626;
+    --mk-yellow:    #d97706;
+    --mk-accent:    #b8960a;
+    --mk-accent2:   #0891b2;
+    --mk-blue:      #2563eb;
+  }
+
+  /* ── LAYOUT ───────────────────────────────────────────────────────── */
+  .mk-wrap {
+    max-width: 1400px;
+    margin: 0 auto;
+    padding: 2rem 1.5rem;
+    font-family: 'Inter', system-ui, sans-serif;
+  }
+
+  /* ── PAGE HEADER ──────────────────────────────────────────────────── */
+  .mk-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    flex-wrap: wrap;
+    gap: 1rem;
+    margin-bottom: 2rem;
+  }
+  .mk-header-left h1 {
+    font-size: 1.6rem;
+    font-weight: 800;
+    color: var(--mk-text);
+    line-height: 1.2;
+  }
+  .mk-header-left p {
+    font-size: 0.85rem;
+    color: var(--mk-text-dim);
+    margin-top: 0.3rem;
+  }
+
+  /* ── THEME TOGGLE BUTTON ──────────────────────────────────────────── */
+  .theme-toggle {
+    background: var(--mk-surface);
+    border: 1px solid var(--mk-border);
+    border-radius: 10px;
+    padding: 0.45rem 1rem;
+    font-size: 0.82rem;
+    font-weight: 600;
+    color: var(--mk-text-dim);
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    gap: 0.4rem;
+    transition: all 0.15s;
+    white-space: nowrap;
+  }
+  .theme-toggle:hover {
+    background: var(--mk-surface2);
+    color: var(--mk-text);
+    border-color: var(--mk-accent);
+  }
+
+  /* ── LOADING / ERROR STATES ───────────────────────────────────────── */
+  .mk-loader {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 0.8rem;
+    padding: 4rem;
+    color: var(--mk-text-dim);
+    font-size: 0.9rem;
+  }
+  .mk-spinner {
+    width: 22px;
+    height: 22px;
+    border: 2px solid var(--mk-border);
+    border-top-color: var(--mk-accent);
+    border-radius: 50%;
+    animation: mk-spin 0.7s linear infinite;
+    flex-shrink: 0;
+  }
+  @keyframes mk-spin { to { transform: rotate(360deg); } }
+
+  .mk-error {
+    background: #ef476f15;
+    border: 1px solid #ef476f30;
+    border-radius: 12px;
+    padding: 1.5rem 2rem;
+    color: var(--mk-fail);
+    font-size: 0.9rem;
+    text-align: center;
+  }
+  .mk-empty {
+    text-align: center;
+    color: var(--mk-text-dim);
+    padding: 4rem 2rem;
+    font-size: 0.9rem;
+  }
+
+  /* ── CARDS GRID ───────────────────────────────────────────────────── */
+  .mk-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
+    gap: 1.25rem;
+  }
+
+  /* ── MARKET CARD ──────────────────────────────────────────────────── */
+  .mk-card {
+    background: var(--mk-surface);
+    border: 1px solid var(--mk-border);
+    border-radius: 16px;
+    overflow: hidden;
+    transition: border-color 0.2s, transform 0.15s, box-shadow 0.2s;
+    position: relative;
+  }
+  .mk-card:hover {
+    border-color: var(--mk-accent);
+    transform: translateY(-2px);
+    box-shadow: 0 8px 32px rgba(0,0,0,0.18);
+  }
+
+  /* Coloured top accent bar */
+  .mk-card-bar {
+    height: 3px;
+    width: 100%;
+  }
+  .mk-card-bar.positive { background: linear-gradient(90deg, var(--mk-success), #00c47780); }
+  .mk-card-bar.negative { background: linear-gradient(90deg, var(--mk-fail),    #ef476f80); }
+  .mk-card-bar.neutral  { background: linear-gradient(90deg, var(--mk-text-dim),#7b7fa840); }
+
+  /* Card header */
+  .mk-card-head {
+    padding: 1.1rem 1.25rem 0.75rem;
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 0.75rem;
+  }
+  .mk-card-title-wrap { flex: 1; min-width: 0; }
+  .mk-card-icon {
+    font-size: 1.1rem;
+    margin-bottom: 0.25rem;
+    line-height: 1;
+  }
+  .mk-card-title {
+    font-size: 0.95rem;
+    font-weight: 800;
+    color: var(--mk-text);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  .mk-card-tag {
+    display: inline-block;
+    margin-top: 0.3rem;
+    padding: 0.15rem 0.55rem;
+    border-radius: 20px;
+    font-size: 0.68rem;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.6px;
+  }
+  .mk-card-tag.positive {
+    background: #06d6a015;
+    color: var(--mk-success);
+    border: 1px solid #06d6a030;
+  }
+  .mk-card-tag.negative {
+    background: #ef476f15;
+    color: var(--mk-fail);
+    border: 1px solid #ef476f30;
+  }
+  .mk-card-tag.neutral {
+    background: var(--mk-surface2);
+    color: var(--mk-text-dim);
+    border: 1px solid var(--mk-border);
+  }
+
+  /* ROI badge (top-right) */
+  .mk-roi-badge {
+    flex-shrink: 0;
+    font-size: 1.5rem;
+    font-weight: 800;
+    line-height: 1;
+    text-align: right;
+  }
+  .mk-roi-badge.positive { color: var(--mk-success); }
+  .mk-roi-badge.negative { color: var(--mk-fail); }
+  .mk-roi-badge.neutral  { color: var(--mk-text-dim); }
+  .mk-roi-label {
+    font-size: 0.65rem;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    color: var(--mk-text-dim);
+    text-align: right;
+    margin-top: 0.15rem;
+  }
+
+  /* Live badge */
+  .mk-live-badge {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.3rem;
+    background: #ffd16615;
+    color: var(--mk-yellow);
+    border: 1px solid #ffd16630;
+    border-radius: 20px;
+    padding: 0.15rem 0.55rem;
+    font-size: 0.68rem;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    margin-left: 0.4rem;
+    vertical-align: middle;
+  }
+  .mk-live-dot {
+    width: 6px;
+    height: 6px;
+    border-radius: 50%;
+    background: var(--mk-yellow);
+    animation: mk-pulse 1.4s ease-in-out infinite;
+    flex-shrink: 0;
+  }
+  @keyframes mk-pulse {
+    0%, 100% { opacity: 1; transform: scale(1); }
+    50%       { opacity: 0.4; transform: scale(0.7); }
+  }
+
+  /* Stats rows */
+  .mk-stats {
+    padding: 0 1.25rem 0.75rem;
+  }
+  .mk-stat-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 0.35rem 0;
+    border-bottom: 1px solid var(--mk-border);
+    font-size: 0.82rem;
+  }
+  .mk-stat-row:last-child { border-bottom: none; }
+  .mk-stat-label { color: var(--mk-text-dim); }
+  .mk-stat-value { font-weight: 700; color: var(--mk-text); }
+  .mk-stat-value.positive { color: var(--mk-success); }
+  .mk-stat-value.negative { color: var(--mk-fail); }
+  .mk-stat-value.yellow   { color: var(--mk-yellow); }
+  .mk-stat-value.blue     { color: var(--mk-blue); }
+
+  /* Win-rate progress bar */
+  .mk-progress-wrap {
+    padding: 0 1.25rem 0.75rem;
+  }
+  .mk-progress-label {
+    display: flex;
+    justify-content: space-between;
+    font-size: 0.72rem;
+    color: var(--mk-text-dim);
+    margin-bottom: 0.3rem;
+  }
+  .mk-progress-track {
+    background: var(--mk-surface2);
+    border-radius: 20px;
+    height: 6px;
+    overflow: hidden;
+  }
+  .mk-progress-fill {
+    height: 100%;
+    border-radius: 20px;
+    transition: width 0.8s ease;
+  }
+  .mk-progress-fill.high   { background: var(--mk-success); }
+  .mk-progress-fill.medium { background: var(--mk-yellow); }
+  .mk-progress-fill.low    { background: var(--mk-fail); }
+
+  /* Streak row */
+  .mk-streak-wrap {
+    padding: 0.6rem 1.25rem 1rem;
+    display: flex;
+    align-items: center;
+    gap: 0.4rem;
+    flex-wrap: wrap;
+  }
+  .mk-streak-label {
+    font-size: 0.7rem;
+    color: var(--mk-text-dim);
+    margin-right: 0.2rem;
+    white-space: nowrap;
+  }
+  .mk-streak-dot {
+    width: 13px;
+    height: 13px;
+    border-radius: 3px;
+    display: inline-block;
+    flex-shrink: 0;
+  }
+  .mk-streak-dot.win  { background: var(--mk-success); }
+  .mk-streak-dot.loss { background: var(--mk-fail); }
+  .mk-streak-none {
+    font-size: 0.75rem;
+    color: var(--mk-text-dim);
+  }
+
+  /* ── SUMMARY BAR ──────────────────────────────────────────────────── */
+  .mk-summary {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(130px, 1fr));
+    gap: 0.75rem;
+    margin-bottom: 2rem;
+  }
+  .mk-summary-card {
+    background: var(--mk-surface);
+    border: 1px solid var(--mk-border);
+    border-radius: 12px;
+    padding: 1rem;
+    text-align: center;
+    transition: border-color 0.2s;
+  }
+  .mk-summary-card:hover { border-color: var(--mk-accent); }
+  .mk-summary-val {
+    font-size: 1.7rem;
+    font-weight: 800;
+    line-height: 1;
+    color: var(--mk-accent2);
+  }
+  .mk-summary-val.positive { color: var(--mk-success); }
+  .mk-summary-val.negative { color: var(--mk-fail); }
+  .mk-summary-val.yellow   { color: var(--mk-yellow); }
+  .mk-summary-lbl {
+    font-size: 0.68rem;
+    color: var(--mk-text-dim);
+    margin-top: 0.35rem;
+    text-transform: uppercase;
+    letter-spacing: 0.6px;
+  }
+
+  /* ── REFRESH BUTTON ───────────────────────────────────────────────── */
+  .mk-toolbar {
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+    margin-bottom: 1.5rem;
+    flex-wrap: wrap;
+  }
+  .mk-refresh-btn {
+    background: var(--mk-surface);
+    border: 1px solid var(--mk-border);
+    border-radius: 8px;
+    padding: 0.4rem 0.9rem;
+    font-size: 0.8rem;
+    font-weight: 600;
+    color: var(--mk-text-dim);
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    gap: 0.35rem;
+    transition: all 0.15s;
+  }
+  .mk-refresh-btn:hover {
+    background: var(--mk-surface2);
+    color: var(--mk-text);
+    border-color: var(--mk-accent2);
+  }
+  .mk-refresh-btn.spinning .mk-refresh-icon {
+    animation: mk-spin 0.7s linear infinite;
+  }
+  .mk-last-updated {
+    font-size: 0.75rem;
+    color: var(--mk-text-dim);
+  }
+
+  /* ── SORT TABS ────────────────────────────────────────────────────── */
+  .mk-sort-tabs {
+    display: flex;
+    gap: 0.35rem;
+    flex-wrap: wrap;
+    margin-left: auto;
+  }
+  .mk-sort-tab {
+    padding: 0.35rem 0.8rem;
+    border-radius: 7px;
+    font-size: 0.75rem;
+    font-weight: 600;
+    cursor: pointer;
+    border: 1px solid var(--mk-border);
+    background: var(--mk-surface);
+    color: var(--mk-text-dim);
+    transition: all 0.15s;
+  }
+  .mk-sort-tab:hover { background: var(--mk-surface2); color: var(--mk-text); }
+  .mk-sort-tab.active {
+    background: var(--mk-accent);
+    border-color: var(--mk-accent);
+    color: #1a1200;
+  }
+
+  /* ── RESPONSIVE ───────────────────────────────────────────────────── */
+  @media (max-width: 600px) {
+    .mk-grid { grid-template-columns: 1fr; }
+    .mk-header { flex-direction: column; align-items: flex-start; }
+    .mk-sort-tabs { margin-left: 0; }
+  }
+</style>
+
+<div class="mk-wrap">
+
+  <!-- Header -->
+  <div class="mk-header">
+    <div class="mk-header-left">
+      <h1>📊 Stats par Marché</h1>
+      <p>Performance détaillée par type de pari — ROI, win rate, séries</p>
+    </div>
+    <button class="theme-toggle" id="themeToggle" onclick="toggleTheme()">
+      <span id="themeIcon">☀️</span>
+      <span id="themeLabel">Mode clair</span>
+    </button>
+  </div>
+
+  <!-- Summary KPIs (populated by JS) -->
+  <div class="mk-summary" id="mkSummary">
+    <!-- filled dynamically -->
+  </div>
+
+  <!-- Toolbar -->
+  <div class="mk-toolbar">
+    <button class="mk-refresh-btn" id="refreshBtn" onclick="loadData()">
+      <span class="mk-refresh-icon">↻</span>
+      Actualiser
+    </button>
+    <span class="mk-last-updated" id="lastUpdated"></span>
+    <div class="mk-sort-tabs" id="sortTabs">
+      <div class="mk-sort-tab active" data-sort="total"   onclick="setSort('total')">Total</div>
+      <div class="mk-sort-tab"        data-sort="roi"     onclick="setSort('roi')">ROI</div>
+      <div class="mk-sort-tab"        data-sort="win_rate" onclick="setSort('win_rate')">Win Rate</div>
+      <div class="mk-sort-tab"        data-sort="market"  onclick="setSort('market')">A–Z</div>
+    </div>
+  </div>
+
+  <!-- Cards container -->
+  <div id="mkContainer">
+    <div class="mk-loader">
+      <div class="mk-spinner"></div>
+      Chargement des données…
+    </div>
+  </div>
+
+</div>
+
+<script>
+/* ─────────────────────────────────────────────────────────────────────
+   CONFIG
+───────────────────────────────────────────────────────────────────── */
+const API_URL = '/api/stats/market';
+
+let allData   = [];
+let sortKey   = 'total';
+
+/* ─────────────────────────────────────────────────────────────────────
+   THEME TOGGLE
+───────────────────────────────────────────────────────────────────── */
+function toggleTheme() {
+  const isLight = document.body.classList.toggle('light-mode');
+  document.getElementById('themeIcon').textContent  = isLight ? '🌙' : '☀️';
+  document.getElementById('themeLabel').textContent = isLight ? 'Mode sombre' : 'Mode clair';
+  localStorage.setItem('mk_theme', isLight ? 'light' : 'dark');
+}
+
+(function initTheme() {
+  const saved = localStorage.getItem('mk_theme');
+  if (saved === 'light') {
+    document.body.classList.add('light-mode');
+    document.getElementById('themeIcon').textContent  = '🌙';
+    document.getElementById('themeLabel').textContent = 'Mode sombre';
+  }
+})();
+
+/* ─────────────────────────────────────────────────────────────────────
+   SORT
+───────────────────────────────────────────────────────────────────── */
+function setSort(key) {
+  sortKey = key;
+  document.querySelectorAll('.mk-sort-tab').forEach(t => {
+    t.classList.toggle('active', t.dataset.sort === key);
+  });
+  renderCards(allData);
+}
+
+function sortData(data) {
+  return [...data].sort((a, b) => {
+    if (sortKey === 'market') return (a.market || '').localeCompare(b.market || '');
+    return (b[sortKey] ?? -Infinity) - (a[sortKey] ?? -Infinity);
+  });
+}
+
+/* ─────────────────────────────────────────────────────────────────────
+   HELPERS
+───────────────────────────────────────────────────────────────────── */
+function marketIcon(name) {
+  if (!name) return '⚽';
+  const n = name.toLowerCase();
+  if (n.includes('btts') || n.includes('deux') || n.includes('both')) return '🤝';
+  if (n.includes('over') || n.includes('plus') || n.includes('+'))    return '⬆️';
+  if (n.includes('under') || n.includes('moins') || n.includes('-'))  return '⬇️';
+  if (n.includes('home') || n.includes('domicile'))                   return '🏠';
+  if (n.includes('away') || n.includes('extérieur'))                  return '✈️';
+  if (n.includes('draw') || n.includes('nul'))                        return '🤝';
+  if (n.includes('noire') || n.includes('bête'))                      return '🔥';
+  return '⚽';
+}
+
+function roiClass(roi) {
+  if (roi > 0)  return 'positive';
+  if (roi < 0)  return 'negative';
+  return 'neutral';
+}
+
+function winRateClass(wr) {
+  if (wr >= 55) return 'high';
+  if (wr >= 45) return 'medium';
+  return 'low';
+}
+
+function winRateColor(wr) {
+  if (wr >= 55) return 'positive';
+  if (wr >= 45) return 'yellow';
+  return 'negative';
+}
+
+function fmtRoi(roi) {
+  if (roi === null || roi === undefined) return '—';
+  return (roi > 0 ? '+' : '') + roi + '%';
+}
+
+function fmtNum(v, fallback = '—') {
+  return (v !== null && v !== undefined) ? v : fallback;
+}
+
+/* Build streak dots (max 6 shown) */
+function buildStreakDots(streakCur) {
+  if (!streakCur) return '<span class="mk-streak-none">—</span>';
+  const count   = Math.min(Math.abs(streakCur), 6);
+  const cls     = streakCur > 0 ? 'win' : 'loss';
+  const emoji   = streakCur > 0 ? '✅' : '❌';
+  let dots = '';
+  for (let i = 0; i < count; i++) {
+    dots += `<span class="mk-streak-dot ${cls}" title="${emoji} ×${Math.abs(streakCur)}"></span>`;
+  }
+  if (Math.abs(streakCur) > 6) {
+    dots += `<span class="mk-streak-none" style="font-size:.7rem;margin-left:.2rem">+${Math.abs(streakCur)-6}</span>`;
+  }
+  return dots;
+}
+
+/* ─────────────────────────────────────────────────────────────────────
+   RENDER SUMMARY KPIs
+───────────────────────────────────────────────────────────────────── */
+function renderSummary(data) {
+  const totalBets   = data.reduce((s, m) => s + (m.total   || 0), 0);
+  const totalWins   = data.reduce((s, m) => s + (m.wins    || 0), 0);
+  const totalPend   = data.reduce((s, m) => s + (m.pending || 0), 0);
+  const settled     = Math.max(totalBets - totalPend, 1);
+  const totalLosses = data.reduce((s, m) => s + ((m.total || 0) - (m.wins || 0) - (m.pending || 0)), 0);
+  const globalWR    = Math.round(totalWins / settled * 100 * 10) / 10;
+  const globalROI   = Math.round((totalWins - totalLosses) / settled * 100 * 10) / 10;
+  const markets     = data.length;
+
+  const resolved    = data.filter(m => ((m.total || 0) - (m.pending || 0)) >= 3);
+  const bestMarket  = resolved.length
+    ? resolved.reduce((best, m) => (m.roi > best.roi ? m : best), resolved[0])
+    : null;
+
+  const kpis = [
+    { val: markets,                    cls: '',         lbl: 'Marchés' },
+    { val: totalBets,                  cls: '',         lbl: 'Total paris' },
+    { val: totalWins,                  cls: 'positive', lbl: 'Gagnés' },
+    { val: totalLosses,                cls: 'negative', lbl: 'Perdus' },
+    { val: totalPend,                  cls: 'yellow',   lbl: 'En attente' },
+    { val: globalWR + '%',             cls: globalWR >= 55 ? 'positive' : globalWR >= 45 ? 'yellow' : 'negative', lbl: 'Win Rate global' },
+    { val: (globalROI > 0 ? '+' : '') + globalROI + '%', cls: globalROI > 0 ? 'positive' : 'negative', lbl: 'ROI global' },
+    { val: bestMarket ? bestMarket.market : '—', cls: '', lbl: bestMarket ? '🏆 Meilleur marché' : 'Meilleur marché' },
+  ];
+
+  document.getElementById('mkSummary').innerHTML = kpis.map(k => `
+    <div class="mk-summary-card">
+      <div class="mk-summary-val ${k.cls}">${k.val}</div>
+      <div class="mk-summary-lbl">${k.lbl}</div>
+    </div>
+  `).join('');
+}
+
+/* ─────────────────────────────────────────────────────────────────────
+   RENDER CARDS
+───────────────────────────────────────────────────────────────────── */
+function renderCards(data) {
+  const container = document.getElementById('mkContainer');
+  if (!data || data.length === 0) {
+    container.innerHTML = '<div class="mk-empty">Aucune donnée disponible pour le moment.</div>';
+    return;
+  }
+
+  const sorted = sortData(data);
+
+  const html = sorted.map(m => {
+    const roi      = m.roi      ?? 0;
+    const winRate  = m.win_rate ?? 0;
+    const total    = m.total    ?? 0;
+    const wins     = m.wins     ?? 0;
+    const losses   = (total - wins - (m.pending ?? 0));
+    const pending  = m.pending  ?? 0;
+    const avgOdds  = m.avg_odds ?? '—';
+    const avgValue = m.avg_value != null ? '+' + m.avg_value + '%' : '—';
+    const streakCur  = m.streak_cur  ?? 0;
+    const avgWinStr  = m.streak_win  ?? 0;
+    const avgLossStr = m.streak_loss ?? 0;
+
+    const rClass   = roiClass(roi);
+    const wrClass  = winRateClass(winRate);
+    const wrColor  = winRateColor(winRate);
+    const icon     = marketIcon(m.market);
+
+    const liveBadge = pending > 0
+      ? `<span class="mk-live-badge"><span class="mk-live-dot"></span>${pending} live</span>`
+      : '';
+
+    const streakDots = buildStreakDots(streakCur);
+
+    return `
+      <div class="mk-card">
+        <div class="mk-card-bar ${rClass}"></div>
+
+        <div class="mk-card-head">
+          <div class="mk-card-title-wrap">
+            <div class="mk-card-icon">${icon}</div>
+            <div class="mk-card-title">${m.market || '—'}${liveBadge}</div>
+            <span class="mk-card-tag ${rClass}">ROI ${fmtRoi(roi)}</span>
+          </div>
+          <div>
+            <div class="mk-roi-badge ${rClass}">${fmtRoi(roi)}</div>
+            <div class="mk-roi-label">ROI</div>
+          </div>
+        </div>
+
+        <div class="mk-progress-wrap">
+          <div class="mk-progress-label">
+            <span>Win Rate</span>
+            <span class="mk-stat-value ${wrColor}">${winRate}%</span>
+          </div>
+          <div class="mk-progress-track">
+            <div class="mk-progress-fill ${wrClass}" style="width:${Math.min(winRate, 100)}%"></div>
+          </div>
+        </div>
+
+        <div class="mk-stats">
+          <div class="mk-stat-row">
+            <span class="mk-stat-label">Total paris</span>
+            <span class="mk-stat-value">${total}</span>
+          </div>
+          <div class="mk-stat-row">
+            <span class="mk-stat-label">En attente</span>
+            <span class="mk-stat-value yellow">${pending}</span>
+          </div>
+          <div class="mk-stat-row">
+            <span class="mk-stat-label">Gagnés / Perdus</span>
+            <span class="mk-stat-value">
+              <span style="color:var(--mk-success)">${wins}✅</span>
+              <span style="color:var(--mk-text-dim);margin:0 .2rem">/</span>
+              <span style="color:var(--mk-fail)">${losses}❌</span>
+            </span>
+          </div>
+          <div class="mk-stat-row">
+            <span class="mk-stat-label">Cote moyenne</span>
+            <span class="mk-stat-value blue">${avgOdds}</span>
+          </div>
+          <div class="mk-stat-row">
+            <span class="mk-stat-label">Value moyenne</span>
+            <span class="mk-stat-value positive">${avgValue}</span>
+          </div>
+          <div class="mk-stat-row">
+            <span class="mk-stat-label">Série win moy.</span>
+            <span class="mk-stat-value">${avgWinStr || '—'}</span>
+          </div>
+          <div class="mk-stat-row">
+            <span class="mk-stat-label">Série loss moy.</span>
+            <span class="mk-stat-value">${avgLossStr || '—'}</span>
+          </div>
+        </div>
+
+        <div class="mk-streak-wrap">
+          <span class="mk-streak-label">Série actuelle</span>
+          ${streakDots}
+        </div>
+      </div>
+    `;
+  }).join('');
+
+  container.innerHTML = `<div class="mk-grid">${html}</div>`;
+}
+
+/* ─────────────────────────────────────────────────────────────────────
+   FETCH DATA
+───────────────────────────────────────────────────────────────────── */
+async function loadData() {
+  const btn = document.getElementById('refreshBtn');
+  btn.classList.add('spinning');
+
+  try {
+    const res  = await fetch(API_URL);
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const data = await res.json();
+
+    allData = data;
+    renderSummary(data);
+    renderCards(data);
+
+    const now = new Date();
+    document.getElementById('lastUpdated').textContent =
+      'Mis à jour à ' + now.toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit' });
+
+  } catch (err) {
+    document.getElementById('mkContainer').innerHTML = `
+      <div class="mk-error">
+        ⚠️ Impossible de charger les données : ${err.message}
+      </div>
+    `;
+    console.error('Stats market fetch error:', err);
+  } finally {
+    btn.classList.remove('spinning');
+  }
+}
+
+/* ─────────────────────────────────────────────────────────────────────
+   INIT
+───────────────────────────────────────────────────────────────────── */
+loadData();
+</script>
+{% endblock %}

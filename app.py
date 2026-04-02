@@ -41,6 +41,10 @@ def history():
     leagues = sorted(set(b["league"] for b in bets if b.get("league")))
     return render_template("history.html", bets=bets, leagues=leagues)
 
+@app.route("/stats/markets")
+def stats_markets_page():
+    return render_template("stats_markets.html")
+
 @app.route("/stats")
 def stats_page():
     stats      = get_stats()

@@ -296,7 +296,8 @@
         <a href="/"        {% if request.path == '/' %}class="active-foot"{% endif %}>Dashboard</a>
         <a href="/live"    {% if request.path == '/live' %}class="active-foot"{% endif %}>Aujourd'hui</a>
         <a href="/history" {% if request.path == '/history' %}class="active-foot"{% endif %}>Historique</a>
-        <a href="/stats"   {% if request.path == '/stats' %}class="active-foot"{% endif %}>Stats</a>
+        <a href="/stats"         {% if request.path == '/stats' %}class="active-foot"{% endif %}>Stats</a>
+        <a href="/stats/markets" {% if request.path == '/stats/markets' %}class="active-foot"{% endif %}>Marchés</a>
 
         <div class="nav-sep"></div>
         <span class="nav-section biathl">🎿 BIATHLON</span>
