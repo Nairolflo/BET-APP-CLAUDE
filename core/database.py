@@ -711,20 +711,20 @@ def get_stats_by_league_detailed() -> list:
             ORDER BY total DESC
         """)
         rows = rows_to_dicts(cur, cur.fetchall())
-        # Calcul séries par marché
+        # Calcul séries par ligue
         cur.execute(f"""
-            SELECT market, success
+            SELECT league, success
             FROM ({dedup}) u
             WHERE success != -1
-            ORDER BY market, id
+            ORDER BY league, id
         """)
         series_rows = cur.fetchall()
 
-        # Grouper par marché
+        # Grouper par ligue
         from collections import defaultdict
-        market_results = defaultdict(list)
+        league_results = defaultdict(list)
         for row in series_rows:
-            market_results[row[0]].append(row[1])
+            league_results[row[0]].append(row[1])
 
         def calc_series(results):
             if not results: return 0, 0, 0
@@ -752,7 +752,7 @@ def get_stats_by_league_detailed() -> list:
             settled = max((r.get("total") or 0) - (r.get("pending") or 0), 1)
             wins    = r.get("wins") or 0
             losses  = r.get("losses") or 0
-            current, avg_win, avg_loss = calc_series(market_results.get(r["market"], []))
+            current, avg_win, avg_loss = calc_series(league_results.get(r["league"], []))
             result.append({
                 **r,
                 "win_rate":    round(wins / settled * 100, 1),
